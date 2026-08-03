@@ -1,9 +1,13 @@
 # ML practical
 
-Three parts. [Part A](#part-a--support-ticket-router-baseline-review) reviews the handed-over route
-classifier. [Part B](#part-b--answering-from-the-knowledge-base) is the date-aware question
-answering service. [Part C](#part-c--routing-screenshots) is the stretch item: routing screenshots
-into Part A's four routes. **[How to run everything](#how-to-run-it) is one section, below.**
+Three parts. Sections 1-2 are setup and tests, 3-5 are the commands, then one write-up per part —
+each broken into one section per decision, so a section can be read on its own.
+
+| Part | What it is | Headline | Write-up |
+|---|---|---|---|
+| **A** | Review of the handed-over route classifier | The 98.75% is unfalsifiable, not wrong | [Part A](#part-a--support-ticket-router-baseline-review) |
+| **B** | Date-aware question answering over `kb/` | 0.933 doc accuracy, 0.000 wrong-answer rate | [Part B](#part-b--answering-from-the-knowledge-base) |
+| **C** | Stretch: routing screenshots into A's four routes | 3/3 assets, 0 wrong-and-unflagged under blur | [Part C](#part-c--routing-screenshots) |
 
 ```
 src/router/    Part A — data · crossval · model · evaluate · predict · tune · artifact
@@ -13,14 +17,18 @@ src/qa/        Part B — kb · retriever · embeddings · answerer · eval_answ
 tests/         test_kb · test_retriever · test_answerer · test_artifact · test_screenshots
 eval/          Part B — gold.csv labels · doc_vectors.npz cached embeddings
 models/        router.joblib (committed) · all-MiniLM-L6-v2 (fetched, gitignored)
+notebook/      Part A — baseline_classifier_training · baseline_fix_walkthrough
 ```
+
+**No LLM and no API key anywhere.** Part B is retrieval plus verbatim quoting; Part C is OCR plus
+Part A's classifier. Everything runs locally.
 
 ---
 
 # How to run it
 
-Every command in one place. **Verified from a clean `git clone` into an empty venv**, because "it
-works on my machine" is not a claim a reviewer can check.
+**Verified from a clean `git clone` into an empty venv**, because "it works on my machine" is not a
+claim a reviewer can check.
 
 ## 1. Setup — once
 
@@ -29,12 +37,14 @@ python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt      # one file, includes pytest and torch
 ```
 
+Two optional extras. Both are skipped rather than failed when absent:
+
 ```bash
-# Part B only: vendors the sentence-embedding model into models/ (~87MB, once).
+# Part B: vendors the sentence-embedding model into models/ (~87MB, once).
 # Skip it and Part B still runs, ranking lexically at 0.867 instead of 0.933.
 ./venv/bin/python -m src.qa.fetch_model
 
-# Part C only: the OCR engine. A system package, so pip cannot supply it.
+# Part C: the OCR engine. A system package, so pip cannot supply it.
 brew install tesseract                          # or: apt install tesseract-ocr
 ```
 
@@ -44,9 +54,6 @@ brew install tesseract                          # or: apt install tesseract-ocr
 ./venv/bin/python -m pytest tests/ -q           # 33 passed
 ```
 
-Both optional setup steps above are skipped, not failed, when their dependency is missing, so
-green means green either way:
-
 | Setup done | Result |
 |---|---|
 | Both | 33 passed |
@@ -54,19 +61,18 @@ green means green either way:
 | No `fetch_model` | 31 passed, 2 skipped |
 | Neither | 28 passed, 5 skipped |
 
-The Part B skips are the fusion tests, which need to encode a query. The Part C skips are the ones
-that need OCR; its redaction tests are pure text and always run.
+The Part B skips need to encode a query; the Part C skips need OCR. Part C's redaction tests are
+pure text and always run.
 
-One test per behaviour, probing several inputs in a loop where a behaviour has more than one
-interesting input:
+One test per behaviour, looping over inputs where a behaviour has more than one interesting case:
 
 | File | Tests | Covers |
 |---|---|---|
-| `test_kb.py` | 5 | Window boundaries at both ends, lapsing, malformed front matter, and two properties of the shipped KB: one version of a lineage in force per day, and disjoint candidate pools |
-| `test_answerer.py` | 7 | One question at two dates returning different documents, lapsed notices answering in the negative, abstention on absent topics, answer text copied verbatim, rejected input |
-| `test_retriever.py` | 7 | Fusion arithmetic and the weight extremes, the vocabulary gap embeddings close, the lexical fallback when the optional model is missing, unit-norm document vectors |
-| `test_artifact.py` | 5 | A round trip predicting identically in label and confidence, recorded provenance, and that the prediction path loads or raises but never trains |
-| `test_screenshots.py` | 9 | Redaction of each identifier class and its ordering, the two-pass read recovering low-contrast text, and the review gate holding a blurred scan, an unreadable one, or one from a reader that cannot score itself |
+| `test_kb.py` | 5 | Window boundaries both ends, lapsing, malformed front matter, one version of a lineage in force per day, disjoint candidate pools |
+| `test_answerer.py` | 7 | One question at two dates returning different documents, lapsed notices answering in the negative, abstention, verbatim answer text, rejected input |
+| `test_retriever.py` | 7 | Fusion arithmetic and weight extremes, the vocabulary gap embeddings close, the lexical fallback, unit-norm vectors |
+| `test_artifact.py` | 5 | Round trip identical in label and confidence, recorded provenance, prediction path loads or raises but never trains |
+| `test_screenshots.py` | 9 | Redaction per identifier class and its ordering, two-pass recovery of low-contrast text, review gate on blurred, unreadable, and unscored reads |
 
 ## 3. Part A — route classification
 
@@ -82,8 +88,8 @@ interesting input:
 ```
 
 ```bash
-./venv/bin/python -m src.router.evaluate        # the honest scores in Part A below
-./venv/bin/python -m src.router.tune            # re-derive the tuned settings (slow, grid search)
+./venv/bin/python -m src.router.evaluate        # the honest scores
+./venv/bin/python -m src.router.tune            # re-derive tuned settings (slow, grid search)
 ./venv/bin/python -m src.router.artifact        # retrain and rewrite models/router.joblib
 ```
 
@@ -126,29 +132,32 @@ result.text, result.doc_ids, result.status      # -> "...within 60 days...", ["k
 # One screenshot, straight to stdout.
 ./venv/bin/python -m src.router.screenshots --image starter/media/screenshots/txn-failed.png
 
-# The other extraction backend. Measurably worse; see Part C for why it is still selectable.
-./venv/bin/python -m src.router.screenshots --dir starter/media/screenshots \
-    --reader vlm --vlm-path /path/to/SmolVLM-500M-Instruct
-
 ./venv/bin/python -m src.router.screenshot_eval # blur sweep: how routing degrades
-
-# OCR against a vision language model on the same scans. Runs the OCR tier alone without --vlm.
-./venv/bin/python -m src.router.screenshot_compare --vlm /path/to/SmolVLM-500M-Instruct
 ```
 
 Needs `brew install tesseract` from step 1. Reuses `models/router.joblib`, so there is no second
-model to build. `screenshot_compare` needs a local vision model directory for its second tier and
-skips it with a warning otherwise, so the model is not a dependency of Part C.
+model to build.
+
+Extraction is pluggable, and the vision-model backend is selectable so the comparison in
+[Part C](#part-c--routing-screenshots) is reproducible rather than asserted. It needs a local model
+directory and is measurably worse:
+
+```bash
+./venv/bin/python -m src.router.screenshots --dir starter/media/screenshots \
+    --reader vlm --vlm-path /path/to/SmolVLM-500M-Instruct
+
+# OCR against the vision model on the same scans. Runs the OCR tier alone without --vlm.
+./venv/bin/python -m src.router.screenshot_compare --vlm /path/to/SmolVLM-500M-Instruct
+```
 
 ---
 
 # Part A — Support Ticket Router baseline review
 
-Numbers below come from `notebook/baseline_classifier_training.ipynb`. Commands are in
-[How to run it](#3-part-a--route-classification).
-
-`crossval` holds the grouped-CV protocol that `evaluate`, `model` and `tune` all score
-through, so the search and the reported number cannot drift apart.
+Numbers below come from `notebook/baseline_classifier_training.ipynb`; commands are in
+[How to run it](#3-part-a--route-classification). `crossval` holds the grouped-CV protocol that
+`evaluate`, `model` and `tune` all score through, so the search and the reported number cannot drift
+apart.
 
 ## Verdict
 
@@ -184,17 +193,13 @@ siblings on both sides. 62 of 80 test rows sit within 0.80 cosine of a training 
 | Random 5-fold | 1.0000 |
 | Grouped 5-fold, no shared template | 1.0000 |
 
-100%, which is worse news than 98.75%. I built the grouped split expecting it to break the
-model and it didn't. Nothing in `train.csv` produces an error, so the set can't rank two
-models or catch a regression.
+100%, which is worse news than 98.75%. I built the grouped split expecting it to break the model and
+it didn't. Nothing in `train.csv` produces an error, so the set can't rank two models or catch a
+regression. A 20-word vocabulary still scores 83.3%; 30 words, 84.8%. Mostly keyword lookup.
 
-A 20-word vocabulary still scores 83.3%; 30 words, 84.8%. Mostly keyword lookup.
-
-So: accuracy is unmeasured. 98.75% isn't wrong, it's unfalsifiable. First deliverable is a
-few hundred real messages labelled by someone who didn't write the model.
-
-Hand-written paraphrases scored 8/9 — encouraging, and only 9 probes, so it stays an
-anecdote.
+So accuracy is unmeasured: 98.75% isn't wrong, it's unfalsifiable. First deliverable is a few hundred
+real messages labelled by someone who didn't write the model. Hand-written paraphrases scored 8/9 —
+encouraging, and only 9 probes, so it stays an anecdote.
 
 ## Production metric
 
@@ -247,12 +252,10 @@ Baseline's probably close to good enough. The evaluation isn't.
 
 ## The trained model is saved
 
-`models/router.joblib` (228KB, committed) holds the fitted pipeline. `predict` loads it and
-**never fits**.
-
-The reason is not speed on this data — training 400 rows takes 82ms. It is that fitting is
-proportional to the training set, so training inside the prediction path is a cost that grows
-with the corpus and repeats on every call:
+`models/router.joblib` (228KB, committed) holds the fitted pipeline. `predict` loads it and **never
+fits**. The reason is not speed on this data — training 400 rows takes 82ms — but that fitting is
+proportional to the training set, so training inside the prediction path is a cost that grows with the
+corpus and repeats on every call:
 
 | Training rows | Fit | Load artifact |
 |---|---|---|
@@ -260,46 +263,43 @@ with the corpus and repeats on every call:
 | 4,000 | 385ms | 7ms |
 | 16,000 | 1,354ms | 7ms |
 
-Loading is flat; fitting is not. At a large corpus and high request volume the retraining version
-is the wrong shape regardless of how fast it looks at n=400, so a missing artifact raises with the
-command to build it rather than quietly training and hiding the cost. `test_get_pipeline_never_calls_train`
-pins this by making `train` raise if the prediction path touches it.
+Loading is flat; fitting is not. At a large corpus and high request volume the retraining version is
+the wrong shape regardless of how fast it looks at n=400, so a missing artifact raises with the
+command to build it rather than quietly training and hiding the cost.
+`test_get_pipeline_never_calls_train` pins this by making `train` raise if the prediction path
+touches it.
 
-The second reason is provenance. The artifact stores the training-row count, a digest of
-`train.csv`, the resolved hyperparameters (`C`, n-gram ranges, `FRAUD_SKEW`) and the scikit-learn
-version, so a prediction can be traced to the model that made it. Edit `train.csv` and the next
-load warns that the digest no longer matches — it still predicts, because refusing to load would
-break the CLI after any data edit, but it will not do so silently.
-
-Training is deterministic (verified: identical coefficients across fits), so the artifact is a
-convenience and an audit record rather than the only way to obtain this model.
+The second reason is provenance: the artifact stores the training-row count, a digest of `train.csv`,
+the resolved hyperparameters (`C`, n-gram ranges, `FRAUD_SKEW`) and the scikit-learn version, so a
+prediction traces to the model that made it. Edit `train.csv` and the next load warns that the digest
+no longer matches — it still predicts, because refusing to load would break the CLI after any data
+edit, but it will not do so silently. Training is deterministic (verified: identical coefficients
+across fits), so the artifact is a convenience and an audit record rather than the only way to obtain
+this model.
 
 ---
 
 # Part B — Answering from the knowledge base
 
 **No LLM and no API key.** Retrieval over 31 documents fusing two signals — TF-IDF and sentence
-embeddings — and answers are sentences copied verbatim from the document cited. That is the
-grounding argument: the answer text is a substring of the source, so it cannot drift from it, and
-`doc_ids` is checkable by opening the file. `test_answer_text_is_copied_from_the_cited_document`
-asserts exactly this.
+embeddings — with answers copied verbatim from the document cited. That is the grounding argument:
+the answer text is a substring of the source, so it cannot drift from it, and `doc_ids` is checkable
+by opening the file. `test_answer_text_is_copied_from_the_cited_document` asserts exactly this.
 
-Embeddings are the brief's "embeddings and no LLM" option. They are a required dependency, so the
-scores below are what a reviewer reproduces by default — but the service does not *break* without
-them: it ranks lexically, says so in the log, and scores 0.867 instead of 0.933. Two tests pin that
-fallback by simulating the dependency's absence.
-
-Commands are in [How to run it](#4-part-b--question-answering).
+Embeddings are the brief's "embeddings and no LLM" option, and a required dependency, so the scores
+below are what a reviewer reproduces by default. The service does not *break* without them: it ranks
+lexically, says so in the log, and scores 0.867 instead of 0.933. Two tests pin that fallback by
+simulating the dependency's absence. Commands are in
+[How to run it](#4-part-b--question-answering).
 
 **On the embedding model.** `fetch_model` keeps inference off the network: without a local copy the
-first question of the first run pays the download inside the answering path; with one,
-`load_model()` reads `models/all-MiniLM-L6-v2` **once per process** — 0.44s at startup, then a flat
-28ms per question with no reload. It skips files already present and retries a dropped connection
-rather than restarting the 87MB file.
-
-Those 87MB are gitignored: binary weights would sit in the history of every clone forever, and one
-pinned command reproduces them. `eval/doc_vectors.npz` (44KB, the document vectors) *is* committed,
-so the retrieval fixture travels with the repo even though the weights do not.
+first question of the first run pays the download inside the answering path; with one, `load_model()`
+reads `models/all-MiniLM-L6-v2` **once per process** — 0.44s at startup, then a flat 28ms per
+question. It skips files already present, retries a dropped connection three times, and writes to a
+`.part` name so an interrupted download cannot look complete. The 87MB is gitignored, since weights
+would sit in every clone's history forever
+and one pinned command reproduces them, but `eval/doc_vectors.npz` (44KB) *is* committed so the
+retrieval fixture travels with the repo.
 
 ## Retrieval: two signals, because they fail differently
 
@@ -321,35 +321,33 @@ Only four questions separate them, which is the whole argument in one table:
 | q24 | ✓ | ✗ wrong | ✓ | an exact term embeddings smear together |
 | q38 | ✗ false | ✓ | ✗ false | unanswerable, but built from KB words |
 
-**TF-IDF is precise and cheap.** Exact terms, figures and doc ids match on the token itself, so
-q24 lands on the right document; it needs no model, no 87MB of weights and no torch, and it runs
-2.4× faster than the semantic path. Its ceiling is vocabulary: q01 and q19 are wrong because
-nothing in the question shares words with the document that answers it, and no threshold fixes
-that. It also carries the worst wrong-answer rate of the three, 0.053.
+**TF-IDF is precise and cheap.** Exact terms, figures and doc ids match on the token itself, so q24
+lands on the right document; it needs no model, no 87MB of weights and no torch, and runs 2.4× faster
+than the semantic path. Its ceiling is vocabulary — q01 and q19 are wrong because nothing in the
+question shares words with the document that answers it, which no threshold fixes — and it carries
+the worst wrong-answer rate of the three at 0.053.
 
 **Embeddings generalise across wording.** They close both vocabulary gaps and are the only
-configuration to decline every unanswerable question, 1.000 against 0.875 — a question built from
-in-KB words like q38 still lands far from every document in vector space, where TF-IDF sees
-overlap. The cost is precision on exact terms (q24 regresses) plus a real dependency and 29ms.
+configuration to decline every unanswerable question, 1.000 against 0.875: a question built from
+in-KB words like q38 still lands far from every document in vector space, where TF-IDF sees overlap.
+The cost is precision on exact terms (q24 regresses), a real dependency and 29ms.
 
-**The hybrid wins because the two failure sets barely intersect.** It keeps q24's lexical
-precision and gains q01 and q19, reaching 0.933 document accuracy and the only 0.000
-wrong-answer rate in the table — no confidently-wrong answer on any of the 38. Fusing costs less
-than embeddings alone (23ms, the lexical pass being nearly free next to encoding). What it does
-not inherit is embeddings' clean abstention: q38 is still answered, so 0.875.
+**The hybrid wins because the two failure sets barely intersect.** It keeps q24 and gains q01 and
+q19, reaching 0.933 document accuracy and the only 0.000 wrong-answer rate in the table — no
+confidently-wrong answer on any of the 38 — at 23ms, less than embeddings alone since the lexical
+pass is nearly free next to encoding. What it does not inherit is embeddings' clean abstention: q38
+is still answered, hence 0.875.
 
-Both signals are cosines, so they fuse as a weighted sum of raw values — deliberately not min-max
-normalised per query, which would map the best candidate to 1.0 on every question and silently
+Both signals are cosines, so they fuse as a weighted sum of raw values, deliberately not min-max
+normalised per query — that would map the best candidate to 1.0 on every question and silently
 disable the absolute abstention threshold.
 
-Document vectors do not depend on `as_of`, so they are encoded once, cached in
-`eval/doc_vectors.npz` (44KB, committed), and date filtering is a row selection over them. Only
-the query is encoded per call — which is why the cached fixture alone is not enough to call the
-system semantic, and `Retriever.describe()` reports `tfidf` when the model is absent even though
-document vectors are present.
-
-Filter first, rank second still holds, and the date layer (`kb.py`) was not touched to add any of
-this.
+Document vectors do not depend on `as_of`, so they are encoded once into `eval/doc_vectors.npz`
+(44KB, committed) and date filtering is a row selection over them. Only the query is encoded per
+call, which is why the cached fixture alone does not make the system semantic:
+`Retriever.describe()` reports `tfidf` when the model is absent even though the document vectors are
+present. Filter first, rank second still holds, and the date layer (`kb.py`) was not touched to add
+any of this.
 
 ## Correct as at a date
 
@@ -387,24 +385,22 @@ Nine of 38 questions are declined, with empty `doc_ids` and plain words saying a
 needed. Silence is the right default when the cost of a confidently wrong policy answer is a
 customer acting on it.
 
-The measured finding is that **the obvious signals do not work**. Cosine cannot separate
-answerable from unanswerable: being length-normalised, a question sharing two words with a
-short document scores like one sharing eight with a long one, and the distributions overlap
-almost entirely (unanswerable 0.092–0.263 against answerable 0.101–0.477). The share of
-question words missing from the KB fails too — it is reported as a diagnostic and thresholded
-on nothing.
+The measured finding is that **the obvious signals do not work**. Cosine cannot separate answerable
+from unanswerable: being length-normalised, a question sharing two words with a short document scores
+like one sharing eight with a long one, and the distributions overlap almost entirely (unanswerable
+0.092–0.263 against answerable 0.101–0.477). The share of question words missing from the KB fails
+too, so it is reported as a diagnostic and thresholded on nothing.
 
-What separates them is *which* words are missing. Every unanswerable question contains a domain
-noun absent from the whole corpus — margin, custodian, chargeback, electricity. Answerable ones
-are missing only filler and dates. So abstention is a conjunction: a **long absent term**
-(≥6 chars, absent from the KB) **and** low **salient coverage** (IDF-weighted share of the
-question's vocabulary that the top document contains, <0.35). Requiring both keeps "how many
-days did a customer have in March 2026" answerable while declining "what interest rate on a
-crypto backed margin loan". It moved abstention recall 0.375 → 0.875.
+What separates them is *which* words are missing. Every unanswerable question contains a domain noun
+absent from the whole corpus — margin, custodian, chargeback, electricity — while answerable ones are
+missing only filler and dates. So abstention is a conjunction: a **long absent term** (≥6 chars,
+absent from the KB) **and** low **salient coverage** (IDF-weighted share of the question's vocabulary
+the top document contains, <0.35). Requiring both keeps "how many days did a customer have in March
+2026" answerable while declining "what interest rate on a crypto backed margin loan", and moved
+abstention recall 0.375 → 0.875.
 
-A lapsed hit faces the same 0.35 bar but without the absent-term escape, and otherwise yields
-to the best in-force document — announcing an unrelated expiry is a confidently wrong answer,
-not a helpful one.
+A lapsed hit faces the same 0.35 bar without the absent-term escape, and otherwise yields to the best
+in-force document — announcing an unrelated expiry is a confidently wrong answer, not a helpful one.
 
 ## How it was measured, and what it scores
 
@@ -431,23 +427,21 @@ Per stratum, with Wilson intervals — the normal approximation is useless at n=
 
 One aggregate number would hide all four, and the strata fail for different reasons.
 
-**Lexical against semantic against fused** is scored above, in
-[Retrieval](#retrieval-two-signals-because-they-fail-differently) — choosing embeddings was a
-measurement rather than a preference, and the per-question table there is the argument: each
-signal fixes what the other breaks.
+**Lexical against semantic against fused** is scored in
+[Retrieval](#retrieval-two-signals-because-they-fail-differently) above — choosing embeddings was a
+measurement, not a preference.
 
 The weight sweep is flat at 0.933/0.000 across **0.38–0.52** and degrades either side, so 0.45 is the
-centre of a plateau rather than a fitted point — the choice does not sit on a cliff.
-`eval_answers.py` prints the sweep, on a grid deliberately tighter near the shipped weight, since
-a coarse step hides where the flat region ends.
+centre of a plateau rather than a fitted point. `eval_answers.py` prints the sweep on a grid
+deliberately tighter near the shipped weight, since a coarse step hides where the flat region ends.
 
-**Where embeddings lose:** abstention recall, 0.875 against a clean 1.000 for embeddings alone.
-Semantic similarity gives q38 enough of a plausible neighbour to answer it. I kept the hybrid
-because a wrong-answer rate of 0.000 matters more than one extra abstention, but the trade is
-real and it is the reverse of what I expected.
+**Where the hybrid loses** is abstention recall: 0.875 against a clean 1.000 for embeddings alone,
+because semantic similarity gives q38 enough of a plausible neighbour to answer it. I kept the hybrid
+because a 0.000 wrong-answer rate matters more than one extra abstention, but the trade is real and
+the reverse of what I expected.
 
-**Ablations, because they are what make the headline mean anything.** If switching the date
-filter off does not move the score, the score is not measuring the thing this exercise is about:
+**Ablations, because they are what make the headline mean anything.** If switching the date filter
+off does not move the score, the score is not measuring the thing this exercise is about:
 
 | Configuration | Doc accuracy | Wrong-answer |
 |---|---|---|
@@ -456,19 +450,16 @@ filter off does not move the score, the score is not measuring the thing this ex
 | No abstention (always answer top hit) | 0.967 | 0.026 |
 | Coverage only, no absent-term conjunction | 0.767 | 0.000 |
 
-Dropping the date filter costs 40% of document accuracy and takes the wrong-answer rate from
-zero to 0.316. That is the number that says the system is doing date resolution rather than
-keyword matching.
+Dropping the date filter costs 40% of document accuracy and takes the wrong-answer rate from zero to
+0.316. That is the number saying the system does date resolution rather than keyword matching.
 
 The second row is a cost, stated plainly: **abstaining loses document accuracy.** Answering
-everything scores 0.967 against the shipped 0.933, because q12 and q22 are declined despite the
-right document ranking first. Abstention buys a 0.000 wrong-answer rate and all 7 correct
-declines at the price of those two, which is the trade I would defend for policy answers a
-customer acts on — but it is a trade, not a free win. The coverage-only row is the other side:
-drop half the conjunction and document accuracy falls to 0.767.
-
-`eval_answers.py` also prints a coverage threshold sweep, so 0.35 is visible as a point on a
-curve rather than asserted.
+everything scores 0.967 against the shipped 0.933, because q12 and q22 are declined despite the right
+document ranking first. Abstention buys a 0.000 wrong-answer rate and all 7 correct declines at the
+price of those two — the trade I would defend for policy answers a customer acts on, but a trade and
+not a free win. The last row is the other side: drop half the conjunction and accuracy falls to
+0.767. `eval_answers.py` also prints a coverage sweep, so 0.35 is a point on a curve rather than an
+assertion.
 
 ## The three failures
 
@@ -526,29 +517,27 @@ All three assets reach the right route, on redacted text, with no model beyond P
 
 Three files is a demonstration, not an evaluation, and nothing below is offered as an accuracy.
 
-## Why screenshots, and why OCR rather than a vision model
+## Why screenshots, and why OCR
 
 Screenshots, because their text is **rendered, not photographed**. The pixels came out of a font
-renderer at a known size with no perspective, no motion blur and no background — the easy case for
-OCR, and the case where a vision model's extra capability buys nothing. Voice is the harder
-modality on every axis that matters here: it needs a real acoustic model rather than a system
-binary, it degrades on accent and crosstalk in ways I cannot bound from three clips, and its
-failure mode is a plausible wrong word rather than a visibly garbled one.
+renderer at a known size — no perspective, no motion blur, no background — which is the easy case
+for OCR and the case where a vision model's extra capability buys nothing. Voice is harder on every
+axis that matters here: it needs a real acoustic model rather than a system binary, it degrades on
+accent and crosstalk in ways I cannot bound from three clips, and its failure mode is a plausible
+wrong word rather than a visibly garbled one.
 
-OCR rather than a vision model, for the same reason: the task is transcription, and Tesseract is
-already at 86–95 mean word confidence on these assets. A vision model would earn its cost on
-layout reasoning — reading a chart, judging whether a UI state looks wrong — and none of the four
-routes needs that. The route is decided by *what the customer wrote*, which is text.
+OCR rather than a vision model, for the same reason: the task is transcription, Tesseract is
+already at 86–95 mean word confidence on these assets, and none of the four routes needs the layout
+reasoning a vision model would earn its cost on. The route is decided by *what the customer wrote*,
+which is text. So this reuses the Part A classifier unchanged — a screenshot and a typed ticket are
+routed by the same model on the same four labels, and Part C adds an extraction stage rather than a
+second classifier with its own drift and its own retraining story.
 
-The consequence worth stating: this reuses the Part A classifier unchanged, so a screenshot and a
-typed ticket are routed by the same model on the same four labels. Part C adds an extraction
-stage, not a second classifier with its own drift and its own retraining story.
+## OCR against a vision model, measured
 
-**The comparison, run rather than asserted.** `screenshot_compare.py` puts both approaches through
-the same 12 scans — 3 assets at 4 blur radii — routing with OCR plus the Part A classifier, then
-with a vision language model shown the image and asked for the route directly. The model is
-[SmolVLM-500M-Instruct](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct), 507M
-parameters, run locally on MPS:
+`screenshot_compare.py` puts both approaches through the same 12 scans — 3 assets × 4 blur radii — routing with OCR plus the Part A classifier, then
+with [SmolVLM-500M-Instruct](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct) (507M
+parameters, local, on MPS) shown the image and asked for the route directly:
 
 ```bash
 ./venv/bin/python -m src.router.screenshot_compare --vlm /path/to/SmolVLM-500M-Instruct
@@ -561,12 +550,11 @@ parameters, run locally on MPS:
 
 The 7/12 is not a near miss, and the "routes used" column is why it is in the table. The model
 answered `account-access` on **9 of the 12 scans** regardless of what was on screen, so its score is
-one constant guess landing on the assets that happen to match it. Read the blur row left to right
-and it appears to *improve* as the image degrades, which is the signature of an answer that never
-depended on the pixels. A tier that always says one thing scores 1/3 on a three-class problem
-without discriminating at all.
+one constant guess landing on the assets that happen to match it. Read its blur row left to right
+and accuracy appears to *improve* as the image degrades — the signature of an answer that never
+depended on the pixels.
 
-Asking it to transcribe instead of route shows the same thing at the level below:
+Asking it to transcribe instead of route shows the same thing one level down:
 
 | Asset | OCR | Vision LLM asked to transcribe |
 |---|---|---|
@@ -575,12 +563,14 @@ Asking it to transcribe instead of route shows the same thing at the level below
 | `txn-failed.png` | 96 words | *"Transaction detail."* |
 
 Those are captions, not transcriptions. At this size the model describes the *kind* of screen and
-never reads a line of it — so it cannot see the `448120` admission that decides the fraud route,
+never reads a line of it, so it cannot see the `448120` admission that decides the fraud route —
 and there is no intermediate output to inspect when it routes wrongly. OCR is 2.5× faster and
 returns text a human can check.
 
-**The choice is a flag, not a hardcoded assumption.** Extraction is pluggable, so the losing option
-is still runnable and the claim above is falsifiable rather than asserted:
+## Either reader is selectable
+
+**The choice is a flag, not a hardcoded assumption**, so the losing option stays runnable and the
+claim above is falsifiable:
 
 ```bash
 ./venv/bin/python -m src.router.screenshots --dir starter/media/screenshots   # --reader ocr default
@@ -588,32 +578,29 @@ is still runnable and the claim above is falsifiable rather than asserted:
     --reader vlm --vlm-path /path/to/SmolVLM-500M-Instruct
 ```
 
-Both readers return `(text, confidence)` and feed the same Part A classifier, so `--reader` changes
-how the text is obtained and nothing else. Running the vision reader through the real pipeline is
-harsher than the benchmark above, because the captions are what actually reach the classifier:
+Both readers return `(text, confidence)` and feed the same classifier, so `--reader` changes how the
+text is obtained and nothing else. Running the vision reader through the real pipeline is harsher
+than the benchmark above, because the captions are what actually reach the classifier:
+`login-error.png` → `account-access` ✓, `phishing-sms.png` → `transaction-dispute` ✗ (should be
+`fraud-report`), `txn-failed.png` → `transaction-dispute` ✓. 2 of 3, and the miss is the fraud
+ticket, routed to a billing queue on the strength of *"Screen shows a message alert."*
 
-| Asset | Route from the caption | Expected |
-|---|---|---|
-| `login-error.png` | `account-access` | `account-access` ✓ |
-| `phishing-sms.png` | `transaction-dispute` | `fraud-report` ✗ |
-| `txn-failed.png` | `transaction-dispute` | `transaction-dispute` ✓ |
+All three are held for review anyway, structurally: the vision reader reports **no per-word
+confidence**, so the legibility gate has nothing to threshold. Rather than let an unscored read
+inherit the pass a scored one gets, `route_image` holds every scan from a reader that cannot score
+itself and the CSV leaves `ocr_confidence` empty. A backend with no confidence signal cannot run
+unattended, which is a cost separate from its accuracy.
 
-2 of 3, and the one it gets wrong is the fraud ticket — routed to a billing queue on the strength of
-*"Screen shows a message alert."* All three are held for review anyway, for a structural reason: the
-vision reader reports **no per-word confidence**, so the legibility gate has nothing to threshold.
-Rather than let an unscored read inherit the pass a scored one gets, `route_image` holds every scan
-from a reader that cannot score itself, and the CSV leaves `ocr_confidence` empty. A backend with no
-confidence signal cannot be trusted unattended, which is a cost of the vision approach separate from
-its accuracy.
+Scope: this rules out a **small local** VLM, the only tier measurable here. A hosted frontier model
+would very likely transcribe these images correctly and there is no API access here to show
+otherwise, so "a 500M local vision model cannot do this" is measured and "vision models cannot do
+this" is untested. The argument against the hosted tier is not capability but
+[where the data goes](#where-these-get-processed-and-why-that-is-the-whole-design): it sends customer
+screenshots off the machine, and it bills per ticket where OCR does not.
 
-The honest scope of that result: it rules out a **small local** VLM, which is the only tier I could
-measure here. A hosted frontier model would very likely transcribe these three images correctly, and
-I have no API access in this environment to show otherwise — so treat "vision models cannot do this"
-as untested and "a 500M local vision model cannot do this" as measured. The argument against the
-hosted tier is not capability, it is the one in [Where these get processed](#where-these-get-processed-and-why-that-is-the-whole-design):
-it sends customer screenshots off the machine, and it bills per ticket where OCR does not.
+## Two OCR passes, not one
 
-**Two passes, not one.** These screenshots are light-on-dark, and one pass is not enough:
+These screenshots are light-on-dark, and one pass is not enough:
 
 | Pass | `phishing-sms.png` words read | Blue bubble recovered |
 |---|---|---|
@@ -622,12 +609,12 @@ it sends customer screenshots off the machine, and it bills per ticket where OCR
 | Union (shipped) | 136 | yes |
 
 The customer's own message — *"I didn't make that withdrawal. The code is 448120"* — is white on
-saturated blue. The default pass drops it **entirely**, and that line is the single most important
-one in the ticket: it is the admission that the customer sent the OTP. Inverting does not recover
-it, because the bubble collapses to mid-grey; a luminance threshold does. But the thresholded pass
-degrades faster on a soft image (13 words vs 65 at blur 2), so neither pass alone wins and the
-union takes what either one reads. Near-duplicate suppression across passes was tested and
-rejected: it changed no route and lowered fraud confidence slightly.
+saturated blue, and it is the most important line in the ticket: the admission that they sent the
+OTP. The default pass drops it **entirely**. Inverting does not recover it, because the bubble
+collapses to mid-grey; a luminance threshold does. But the thresholded pass degrades faster on a
+soft image (13 words vs 65 at blur 2), so neither pass alone wins and the union takes what either
+one reads. Near-duplicate suppression across passes was tested and rejected: no route changed and
+fraud confidence dropped slightly.
 
 ## What it costs and what it adds in latency
 
@@ -642,16 +629,15 @@ Measured on this machine, 8 cores, per screenshot at 780×1688:
 | **Per ticket, end to end** | **689–932 ms** |
 | Model load | 7 ms, once per process |
 
-**Marginal cost per ticket is zero** — no API call, no per-token or per-image billing, no egress.
-The whole cost is ~1 s of CPU on a box that is already running. That is the strongest argument for
-this approach over a hosted vision model: at any volume, the bill is capacity rather than usage.
+**Marginal cost per ticket is zero** — no API call, no per-token or per-image billing, no egress,
+just ~1 s of CPU on a box already running. At any volume the bill is capacity rather than usage,
+which is the strongest argument for this over a hosted vision model.
 
 The second pass adds 60–95% to the OCR time. That is the honest price of the blue bubble, and it
 buys the one line that makes `phishing-sms.png` a fraud report. Both passes are independent and
-would parallelise onto separate cores; I did not, because ~1 s is already well inside the latency
-budget of a ticket that a human will read minutes later. This is asynchronous triage, not an
-interactive path — screenshots arrive attached to a ticket, and the route needs to be right more
-than it needs to be fast.
+would parallelise onto separate cores; I did not, because ~1 s already sits well inside the budget
+for asynchronous triage — screenshots arrive attached to a ticket a human reads minutes later, and
+the route needs to be right more than fast.
 
 ## When it degrades
 
@@ -669,42 +655,37 @@ correctly; all three misroutings fell below it. The failures are the interesting
 misroute lands on `general`, never on a wrong specific route. A soft screenshot loses its
 distinguishing vocabulary first and keeps its generic words, so **degradation pulls toward the
 harmless route rather than inventing a fraud report**. Route confidence falls alongside OCR
-confidence (`login-error.png`: 0.981 at blur 0 → 0.485 at blur 4), so the two signals agree rather
-than one masking the other. The drift is not monotonic — `phishing-sms.png` misroutes at blur 3 and
-lands back on `fraud-report` at blur 4 — which is another reason the gate reads legibility rather
-than treating route confidence as a proxy for it.
+confidence (`login-error.png`: 0.981 at blur 0 → 0.485 at blur 4), so neither signal masks the
+other. The drift is not monotonic — `phishing-sms.png` misroutes at blur 3 and lands back on
+`fraud-report` at blur 4 — which is why the gate reads legibility instead of treating route
+confidence as a proxy for it.
 
-What the gate is *not*: a correctness predictor. OCR confidence overlaps between right and wrong
-routes (correct scans span 22.7–94.6, wrong ones 37.0–43.0), so a low score does not mean the
-route is wrong — 3 of the 6 held scans were right. It measures **legibility**, and the guarantee it
-buys is narrow and worth stating precisely: no unreviewed route rests on text nobody could read.
-The cost is 3 needless reviews out of 18. I would rather pay that than route a fraud report from a
-fragment.
+What the gate is *not* is a correctness predictor. OCR confidence overlaps between right and wrong
+routes (correct scans span 22.7–94.6, wrong ones 37.0–43.0), so a low score does not mean the route
+is wrong — 3 of the 6 held scans were right. It buys one narrow guarantee: no unreviewed route rests
+on text nobody could read. The price is 3 needless reviews out of 18, which beats routing a fraud
+report from a fragment.
 
-Two failures degrade differently and are handled separately. **No text at all** returns `review`
-with a null route and never reaches the classifier, because an unreadable image is a failed read,
-not a `general` ticket. **A dropped word** is the mode with no gate at all — a missing word lowers
-no confidence score, and the union of two passes is the mitigation precisely because a word one
-pass loses the other may keep.
+Two other failures are handled separately. **No text at all** returns `review` with a null route and
+never reaches the classifier, because an unreadable image is a failed read, not a `general` ticket.
+**A dropped word** has no gate at all — a missing word lowers no confidence score — and the union of
+two passes is the mitigation precisely because a word one pass loses the other may keep.
 
 ## Where these get processed, and why that is the whole design
 
-The extracted text from three synthetic screenshots contains: an email address, a phone number, a
-6-digit OTP the customer admits sending, a Bitcoin address, a `$4,500.00` balance and a
-transaction reference. A real support queue's screenshots would contain card numbers and
-government IDs. **A screenshot is the highest-risk attachment in support**, because the customer
-chose the crop, not you — they photograph the whole screen, including what you never asked for.
+The extracted text from three synthetic screenshots contains an email address, a phone number, a
+6-digit OTP the customer admits sending, a Bitcoin address, a `$4,500.00` balance and a transaction
+reference. A real queue would add card numbers and government IDs. **A screenshot is the
+highest-risk attachment in support**, because the customer chose the crop, not you — they capture
+the whole screen, including what you never asked for. That forces two decisions.
 
-That forces two decisions.
-
-**Processing stays local.** OCR is a system binary and the classifier is a 228 KB local artifact,
-so pixels and extracted text never cross a network boundary. Sending these to a hosted vision API
-would mean an OTP and a wallet address in a third party's request logs — retained on their
-schedule, replicated to their regions, inside their subprocessor list, and possibly a training
-corpus. That is a data-processing agreement, a cross-border transfer question and a breach-
-notification surface, acquired to save ~1 s of CPU on a task a local binary already does at 86–95
-confidence. The cheaper option is also the one that keeps the data in-house, which is why the
-recommendation does not depend on the cost argument holding.
+**Processing stays local.** OCR is a system binary and the classifier is a 228 KB local artifact, so
+pixels and extracted text never cross a network boundary. A hosted vision API would put an OTP and a
+wallet address in a third party's request logs — retained on their schedule, replicated to their
+regions, inside their subprocessor list, possibly in a training corpus. That is a data-processing
+agreement, a cross-border transfer question and a breach-notification surface, acquired to save ~1 s
+of CPU on a task a local binary already does at 86–95 confidence. The cheaper option is also the one
+that keeps the data in-house, so the recommendation does not depend on the cost argument holding.
 
 **Identifiers are redacted before classification, not after.** Each pattern collapses to its
 category name — `[otp]`, `[wallet]`, `[email]` — so the redaction is what the model sees and what
@@ -716,15 +697,15 @@ lands in the CSV, and no downstream store ever holds the value:
 | `phishing-sms.png` | wallet, phone, otp | `fraud-report` 0.517 | `fraud-report` 0.515 |
 | `txn-failed.png` | — | `transaction-dispute` 0.912 | `transaction-dispute` 0.912 |
 
-**Redaction is free.** No route changes and confidence moves by under 0.01, which is the point:
-the route is decided by the customer's complaint, not by the digits in it. The category name is
-kept deliberately — *that* an OTP was sent is the fraud signal, its value is only liability.
+**Redaction is free.** No route changes and confidence moves by under 0.01, which is the point: the
+route is decided by the customer's complaint, not by the digits in it. The category name is kept
+deliberately — *that* an OTP was sent is the fraud signal; its value is only liability.
 
-Two things this does not do. Ordering matters and is tested: `wallet` runs before `phone`, or the
-digit-run pattern eats the middle of an all-digit address and leaves the `bc1q` prefix behind.
-And redaction is text-only — **the source PNG still contains everything**, so retention and
-access control on the stored image is the unsolved half. The routed text is clean; the attachment
-it came from is not, and a real deployment needs an image-retention policy to match.
+Ordering matters and is tested: `wallet` runs before `phone`, or the digit-run pattern eats the
+middle of an all-digit address and leaves the `bc1q` prefix behind as literal text. And redaction is
+text-only — **the source PNG still contains everything**. The routed text is clean; the attachment it
+came from is not, so retention and access control on the stored image is the unsolved half and a real
+deployment needs an image-retention policy to match.
 
 ## Limits
 
