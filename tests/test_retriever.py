@@ -3,13 +3,13 @@
 The fallback tests matter most. The brief requires the repo to run without the optional
 dependency, so they simulate its absence rather than trusting that the code path works.
 """
-import sys
 from datetime import date
 
 import numpy as np
 import pytest
 
-from src.qa.embeddings import DocumentVectors, doc_text
+from src.qa.embeddings import DocumentVectors, doc_text, load_model
+from src.qa.fetch_model import fetch_file
 from src.qa.retriever import (
     MODE_EMBEDDING,
     MODE_HYBRID,
@@ -24,9 +24,9 @@ DISPUTE = "How many days does a customer have to raise a dispute?"
 
 @pytest.fixture
 def block_sentence_transformers(monkeypatch):
-    """Make importing sentence_transformers fail, as on a clone without the optional extra."""
-    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
-    # load_model caches its result, including failure, so the cache has to be cleared too.
+    """Simulates a clone without the optional extra, where the import left the name None."""
+    monkeypatch.setattr("src.qa.embeddings.SentenceTransformer", None)
+    # load_model caches its result, including failure, so the cache is cleared either side.
     monkeypatch.setattr("src.qa.embeddings._model", None)
     monkeypatch.setattr("src.qa.embeddings._model_tried", False)
     yield
@@ -113,6 +113,43 @@ class TestFusion:
         lexical = Retriever(kb, mode=MODE_TFIDF).search(question, AS_OF, k=1)[0]
         assert semantic.doc_id == "kb-013"
         assert lexical.doc_id != "kb-013"
+
+
+class TestModelLoading:
+    """The model must be constructed once per process, not once per question."""
+
+    def test_the_model_is_built_once_and_then_cached(self, monkeypatch):
+        builds = []
+
+        def counting(source, *args, **kwargs):
+            builds.append(source)
+            return object()
+
+        monkeypatch.setattr("src.qa.embeddings.SentenceTransformer", counting)
+        monkeypatch.setattr("src.qa.embeddings._model", None)
+        monkeypatch.setattr("src.qa.embeddings._model_tried", False)
+
+        assert [load_model() for _ in range(5)].count(None) == 0
+        assert len(builds) == 1
+        monkeypatch.setattr("src.qa.embeddings._model_tried", False)
+
+    def test_a_local_checkout_is_preferred_over_the_hub(self, monkeypatch, tmp_path):
+        """Loading from disk is what keeps the first question off the network."""
+        builds = []
+        monkeypatch.setattr("src.qa.embeddings.LOCAL_MODEL_DIR", tmp_path)
+        monkeypatch.setattr("src.qa.embeddings.SentenceTransformer",
+                            lambda source, *a, **k: builds.append(source) or object())
+        monkeypatch.setattr("src.qa.embeddings._model", None)
+        monkeypatch.setattr("src.qa.embeddings._model_tried", False)
+
+        load_model()
+        assert builds == [str(tmp_path)]
+        monkeypatch.setattr("src.qa.embeddings._model_tried", False)
+
+    def test_fetch_model_skips_files_already_present(self, tmp_path):
+        """Re-running the fetch must not re-download, so it is cheap to put in a setup script."""
+        (tmp_path / "vocab.txt").write_text("already here")
+        assert fetch_file("vocab.txt", tmp_path).read_text() == "already here"
 
 
 class TestDocumentVectors:

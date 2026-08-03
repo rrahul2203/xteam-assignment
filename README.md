@@ -7,6 +7,7 @@ date-aware question answering service.
 ```
 src/router/    Part A — data · crossval · model · evaluate · predict · tune
 src/qa/        Part B — kb · retriever · embeddings · answerer · eval_answers · answer_cli
+               plus build_vectors · fetch_model (one-off setup)
 tests/         Part B — test_kb · test_retriever · test_answerer
 eval/          Part B — gold.csv labels · doc_vectors.npz cached embeddings
 ```
@@ -150,9 +151,15 @@ lexically and says so, and the whole suite still passes. Two tests simulate its 
 ./venv/bin/pip install -r requirements.txt
 
 # Optional. Adds the semantic half of retrieval, which is what the numbers below were measured
-# with. Downloads ~90MB of model weights on first use.
+# with.
 ./venv/bin/pip install -r requirements-embeddings.txt
+./venv/bin/python -m src.qa.fetch_model    # vendors the model into models/, ~87MB, once
 ```
+
+`fetch_model` is what keeps inference off the network. Without a local copy the first question of
+the first run pays the download inside the answering path; with one, `load_model()` reads
+`models/all-MiniLM-L6-v2` and the model is loaded **once per process** — 0.44s at startup, then a
+flat 28ms per question with no reload. It skips files already present, so re-running it is free.
 
 ```bash
 ./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --output answers.csv
@@ -161,7 +168,7 @@ lexically and says so, and the whole suite still passes. Two tests simulate its 
 ./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --mode tfidf   # no embeddings
 ./venv/bin/python -m src.qa.eval_answers   # the numbers below, plus ablations
 ./venv/bin/python -m src.qa.build_vectors  # refresh eval/doc_vectors.npz after editing kb/
-./venv/bin/python -m pytest tests/ -q      # 73 tests
+./venv/bin/python -m pytest tests/ -q      # 76 tests
 ```
 
 ```python
@@ -173,12 +180,42 @@ result.text, result.doc_ids, result.status      # -> "...within 60 days...", ["k
 
 ## Retrieval: two signals, because they fail differently
 
-TF-IDF matches shared words. It is precise on doc ids, figures and exact terms, and blind when a
-question and a document name the same thing differently. Embeddings
-(`all-MiniLM-L6-v2`, 384-dim) match meaning, bridging that gap while being vaguer about which of
-several similar documents is meant.
+Three rankings, scored on the same 38-row gold set. Every number here is from
+`python3 -m src.qa.eval_answers`:
 
-Both are cosines, so they fuse as a weighted sum of raw values — deliberately not min-max
+| | Doc accuracy | Wrong-answer | Abstention recall | Latency/question |
+|---|---|---|---|---|
+| TF-IDF | 0.867 | 0.053 | 0.875 | **12ms** |
+| Embeddings | 0.900 | 0.026 | **1.000** | 29ms |
+| **Hybrid, w=0.45** | **0.933** | **0.000** | 0.875 | 23ms |
+
+Only four questions separate them, which is the whole argument in one table:
+
+| qid | TF-IDF | Embeddings | Hybrid | What it turns on |
+|---|---|---|---|---|
+| q01 | ✗ wrong | ✓ | ✓ | "withdraw" vs the document's "transfers out" |
+| q19 | ✗ wrong | ✓ | ✓ | two documents overlapping in wording |
+| q24 | ✓ | ✗ wrong | ✓ | an exact term embeddings smear together |
+| q38 | ✗ false | ✓ | ✗ false | unanswerable, but built from KB words |
+
+**TF-IDF is precise and cheap.** Exact terms, figures and doc ids match on the token itself, so
+q24 lands on the right document; it needs no model, no 87MB of weights and no torch, and it runs
+2.4× faster than the semantic path. Its ceiling is vocabulary: q01 and q19 are wrong because
+nothing in the question shares words with the document that answers it, and no threshold fixes
+that. It also carries the worst wrong-answer rate of the three, 0.053.
+
+**Embeddings generalise across wording.** They close both vocabulary gaps and are the only
+configuration to decline every unanswerable question, 1.000 against 0.875 — a question built from
+in-KB words like q38 still lands far from every document in vector space, where TF-IDF sees
+overlap. The cost is precision on exact terms (q24 regresses) plus a real dependency and 29ms.
+
+**The hybrid wins because the two failure sets barely intersect.** It keeps q24's lexical
+precision and gains q01 and q19, reaching 0.933 document accuracy and the only 0.000
+wrong-answer rate in the table — no confidently-wrong answer on any of the 38. Fusing costs less
+than embeddings alone (23ms, the lexical pass being nearly free next to encoding). What it does
+not inherit is embeddings' clean abstention: q38 is still answered, so 0.875.
+
+Both signals are cosines, so they fuse as a weighted sum of raw values — deliberately not min-max
 normalised per query, which would map the best candidate to 1.0 on every question and silently
 disable the absolute abstention threshold.
 
@@ -271,21 +308,12 @@ Per stratum, with Wilson intervals — the normal approximation is useless at n=
 
 One aggregate number would hide all four, and the strata fail for different reasons.
 
-**Lexical against semantic against fused.** Choosing embeddings should be a measurement, not a
-preference, so all three are scored on the same gold set:
+**Lexical against semantic against fused** is scored above, in
+[Retrieval](#retrieval-two-signals-because-they-fail-differently) — choosing embeddings was a
+measurement rather than a preference, and the per-question table there is the argument: each
+signal fixes what the other breaks.
 
-| Ranking | Doc accuracy | Wrong-answer | Abstention recall |
-|---|---|---|---|
-| TF-IDF only | 0.867 | 0.053 | 0.875 |
-| Embeddings only | 0.900 | 0.026 | **1.000** |
-| **Hybrid, w=0.45** | **0.933** | **0.000** | 0.875 |
-
-The fusion earns its place for a specific reason: **each signal fixes what the other breaks.**
-Embeddings rescue q01 and q19, both vocabulary gaps TF-IDF cannot close. TF-IDF rescues q24,
-which embeddings get wrong. Only the hybrid gets all three, and it is the only configuration with
-no confidently-wrong answers at all.
-
-The sweep is flat at 0.933/0.000 across **0.38–0.52** and degrades either side, so 0.45 is the
+The weight sweep is flat at 0.933/0.000 across **0.38–0.52** and degrades either side, so 0.45 is the
 centre of a plateau rather than a fitted point — the choice does not sit on a cliff.
 `eval_answers.py` prints the sweep, on a grid deliberately tighter near the shipped weight, since
 a coarse step hides where the flat region ends.

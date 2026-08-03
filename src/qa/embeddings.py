@@ -1,26 +1,31 @@
-"""Sentence embeddings for the KB, with a cached fixture so the repo runs without torch.
+"""Sentence embeddings for the KB documents, with a cached fixture for use without torch.
 
-Loading order, first hit wins: the committed vector fixture, then sentence-transformers if it
-is installed, then nothing. `available()` reports which happened, and the retriever falls back
-to TF-IDF alone when the answer is nothing, so a clone with only scikit-learn still works.
+Vectors are resolved in order, first hit winning: the committed fixture, then the model if it is
+installed, then nothing. `DocumentVectors.available()` reports whether any were found, and the
+retriever drops to TF-IDF alone when none were.
 
-The fixture holds document vectors keyed by doc_id, which covers batch answering and the
-evaluation. A question typed at the CLI is text the fixture cannot know, so single-question mode
-needs the model itself; without it that path is lexical only.
+The fixture holds document vectors only. Encoding a question needs the model, so `can_encode()`
+is a separate check from `available()`.
 
-Document vectors do not depend on `as_of`, so they are encoded once and date filtering becomes a
-row selection. Only the query has to be encoded per call.
+Document vectors do not depend on `as_of`, so they are encoded once and date filtering selects
+rows from them. Only the query is encoded per call.
 """
 import logging
 from pathlib import Path
 
 import numpy as np
 
+# Optional dependency, imported at module scope so the failure is detected once at import time.
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    SentenceTransformer = None
+
 log = logging.getLogger(__name__)
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-# Local checkout used in preference to the hub, so a cached copy works offline.
+# Preferred over the hub name, so a vendored copy is used when present and works offline.
 LOCAL_MODEL_DIR = Path(__file__).resolve().parents[2] / "models" / "all-MiniLM-L6-v2"
 
 _model = None
@@ -32,42 +37,38 @@ def default_vector_path():
 
 
 def load_model():
-    """The sentence-transformers model, or None when it cannot be loaded.
+    """Loads the model once and returns it, or None if it is unavailable.
 
-    Cached including the failure, so a missing dependency costs one import attempt rather than
-    one per question.
+    The result is cached including failure, so an absent dependency costs one attempt rather
+    than one per question, and a present model is read from disk once per process.
     """
     global _model, _model_tried
     if _model_tried:
         return _model
     _model_tried = True
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError:
+    if SentenceTransformer is None:
         log.info("sentence-transformers not installed, embeddings unavailable")
         return None
     source = str(LOCAL_MODEL_DIR) if LOCAL_MODEL_DIR.is_dir() else MODEL_NAME
+    log.info("loading embedding model from %s", source)
     try:
         _model = SentenceTransformer(source)
     except Exception as exc:
-        # Covers a missing local copy, no network for the hub, and hub client failures.
+        # Catches a missing local copy, an unreachable hub, and hub client errors alike.
         log.warning("could not load embedding model from %s: %s", source, exc)
         _model = None
     return _model
 
 
 def can_encode():
-    """True when arbitrary text can be embedded, which needs the model rather than the fixture.
-
-    The fixture covers documents only, so a question typed at the CLI cannot be encoded from it.
-    """
+    """Whether arbitrary text can be embedded, which requires the model and not just vectors."""
     return load_model() is not None
 
 
 def encode(texts):
-    """L2-normalised vectors for `texts`, or None when no model is available.
+    """Encodes `texts` to L2-normalised float32 rows, or returns None with no model.
 
-    Normalising here means a dot product is the cosine, so ranking needs no further scaling.
+    Normalising here makes a dot product the cosine, so ranking applies no further scaling.
     """
     model = load_model()
     if model is None:
@@ -79,12 +80,12 @@ def encode(texts):
 
 
 def doc_text(doc):
-    """The text a document is embedded from. Title twice, matching the TF-IDF corpus."""
+    """Builds the text a document is embedded from, repeating the title to weight it."""
     return f"{doc.title}. {doc.title}. {doc.body}"
 
 
 def save_vectors(docs, path=None):
-    """Encode every document and write the fixture. Requires the model."""
+    """Encodes every document and writes the fixture. Requires the model."""
     docs = list(docs.values()) if isinstance(docs, dict) else list(docs)
     vectors = encode([doc_text(d) for d in docs])
     if vectors is None:
@@ -101,7 +102,7 @@ def save_vectors(docs, path=None):
 
 
 def load_vectors(path=None):
-    """`{doc_id: vector}` from the fixture, or None when it is absent or unreadable."""
+    """Reads the fixture into `{doc_id: vector}`, or returns None if absent or unreadable."""
     path = Path(path or default_vector_path())
     if not path.exists():
         return None
@@ -114,10 +115,10 @@ def load_vectors(path=None):
 
 
 class DocumentVectors:
-    """Document vectors from the fixture where possible, encoding only what is missing.
+    """Holds a vector per document, taken from the fixture and encoding only what it lacks.
 
-    A KB edited after the fixture was written leaves some documents uncovered; those are encoded
-    on construction if the model is present and dropped from the embedding signal if it is not.
+    A KB edited after the fixture was written leaves documents uncovered. Those are encoded on
+    construction when the model is present, and excluded from the embedding signal when not.
     """
 
     def __init__(self, docs, path=None):
@@ -137,14 +138,14 @@ class DocumentVectors:
         self.covered = {d.doc_id for d in docs if d.doc_id in self.vectors}
 
     def available(self):
-        """True when the embedding signal can contribute at all."""
+        """Whether any document has a vector, i.e. whether the signal can contribute at all."""
         return bool(self.covered)
 
     def matrix(self, docs):
-        """Stacked vectors for `docs`, and the subset they correspond to.
+        """Stacks the vectors for `docs` and returns them with the subset they correspond to.
 
-        Documents without a vector are dropped rather than zero-filled, since a zero row scores
-        zero against every query and would silently rank as merely irrelevant.
+        Documents without a vector are dropped rather than zero-filled: a zero row scores zero
+        against every query, which ranks as merely irrelevant instead of as missing.
         """
         usable = [d for d in docs if d.doc_id in self.vectors]
         if not usable:
