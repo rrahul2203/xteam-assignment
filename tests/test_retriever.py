@@ -24,7 +24,7 @@ DISPUTE = "How many days does a customer have to raise a dispute?"
 # Tests that need the query encoded are skipped rather than failed on a clone that installed only
 # requirements.txt, so a reviewer without the optional extra still sees a green suite.
 needs_model = pytest.mark.skipif(
-    not can_encode(), reason="needs sentence-transformers: pip install -r requirements-embeddings.txt"
+    not can_encode(), reason="needs sentence-transformers: pip install -r requirements.txt"
 )
 
 

@@ -1,3 +1,9 @@
+# Part A (router) and Part B (question answering).
 scikit-learn==1.9.0
 numpy==2.4.6
 pytest==9.1.1
+
+# Part B semantic retrieval. Pulls in torch, so this is the bulk of the install.
+# The service degrades to lexical ranking if it is absent, but the scores in the README
+# were measured with it, so it is required rather than optional.
+sentence-transformers==5.6.1

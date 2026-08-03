@@ -1,4 +1,0 @@
-# Optional: enables the semantic half of hybrid retrieval.
-#   ./venv/bin/pip install -r requirements-embeddings.txt
-# Without it the service still runs, ranking lexically only. See the Part B README section.
-sentence-transformers==5.6.1

@@ -140,35 +140,33 @@ grounding argument: the answer text is a substring of the source, so it cannot d
 `doc_ids` is checkable by opening the file. `test_answer_text_is_copied_from_the_cited_document`
 asserts exactly this.
 
-Embeddings are the brief's "embeddings and no LLM" option, and they are optional rather than
-assumed. `sentence-transformers` is not in `requirements.txt`; without it the service ranks
-lexically, says so, and scores 0.867 instead of 0.933. Two tests simulate its absence.
+Embeddings are the brief's "embeddings and no LLM" option. They are a required dependency, so the
+scores below are what a reviewer reproduces by default — but the service does not *break* without
+them: it ranks lexically, says so in the log, and scores 0.867 instead of 0.933. Three tests pin
+that fallback by simulating the dependency's absence.
 
 ## Running it
 
-Two supported setups. **Both were verified from a clean `git clone` into an empty venv**, because
-"it works on my machine" is not a claim a reviewer can check:
+Two commands from a clean clone. **Verified by actually doing it** — cloning into an empty venv —
+because "it works on my machine" is not a claim a reviewer can check:
 
 ```bash
-# 1. Lexical only — no torch, no model download. Everything runs.
 python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
-./venv/bin/python -m pytest tests/ -q      # 71 passed, 5 skipped
+./venv/bin/python -m src.qa.fetch_model    # vendors the model into models/, ~87MB, once
 ```
 
-The 5 skips are the fusion tests: they need to encode a query, which needs the model. They skip
-with a reason naming the install command rather than failing, so a green run means green.
-
 ```bash
-# 2. Adds the semantic half, which is what the headline numbers were measured with.
-./venv/bin/pip install -r requirements-embeddings.txt
-./venv/bin/python -m src.qa.fetch_model    # vendors the model into models/, ~87MB, once
 ./venv/bin/python -m pytest tests/ -q      # 76 passed
 ```
 
 **Why `models/` is not in git.** 87MB of binary weights would sit in the history of every clone
-forever, and the download is one reproducible command against a pinned model name. What *is*
-committed is `eval/doc_vectors.npz` (44KB) — the document vectors — so the fixture travels with
-the repo even though the weights do not.
+forever, and `fetch_model` reproduces them in one command against a pinned model name. What *is*
+committed is `eval/doc_vectors.npz` (44KB) — the document vectors — so the retrieval fixture
+travels with the repo even though the weights do not.
+
+If `fetch_model` cannot reach the network, everything still runs: `pytest` reports 71 passed and
+5 skipped (the fusion tests, which need to encode a query), each skip naming the reason rather
+than failing, and the CLI answers in `tfidf` mode.
 
 `fetch_model` is what keeps inference off the network afterwards. Without a local copy the first
 question of the first run pays the download inside the answering path; with one, `load_model()`

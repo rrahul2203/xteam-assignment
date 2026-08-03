@@ -58,7 +58,7 @@ def _warn_lexical_once():
     if not _warned_lexical:
         _warned_lexical = True
         log.info("embeddings unavailable, ranking lexically only "
-                 "(pip install -r requirements-embeddings.txt to enable them)")
+                 "(pip install -r requirements.txt to enable them)")
 
 
 @dataclass(frozen=True)
