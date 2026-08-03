@@ -7,3 +7,8 @@ pytest==9.1.1
 # The service degrades to lexical ranking if it is absent, but the scores in the README
 # were measured with it, so it is required rather than optional.
 sentence-transformers==5.6.1
+
+# Part C screenshot routing. pytesseract only wraps the `tesseract` binary, which pip cannot
+# install -- see the README for `brew install tesseract`. Part C tests skip without it.
+pillow==12.3.0
+pytesseract==0.3.13

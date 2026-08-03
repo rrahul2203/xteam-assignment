@@ -1,15 +1,16 @@
 # ML practical
 
-Two parts, side by side. [Part A](#part-a--support-ticket-router-baseline-review) reviews the
-handed-over route classifier. [Part B](#part-b--answering-from-the-knowledge-base) is the
-date-aware question answering service. **[How to run everything](#how-to-run-it) is one section,
-below.**
+Three parts. [Part A](#part-a--support-ticket-router-baseline-review) reviews the handed-over route
+classifier. [Part B](#part-b--answering-from-the-knowledge-base) is the date-aware question
+answering service. [Part C](#part-c--routing-screenshots) is the stretch item: routing screenshots
+into Part A's four routes. **[How to run everything](#how-to-run-it) is one section, below.**
 
 ```
 src/router/    Part A — data · crossval · model · evaluate · predict · tune · artifact
+               Part C — screenshots · screenshot_eval
 src/qa/        Part B — kb · retriever · embeddings · answerer · eval_answers · answer_cli
                plus build_vectors · fetch_model (one-off setup)
-tests/         test_kb · test_retriever · test_answerer · test_artifact
+tests/         test_kb · test_retriever · test_answerer · test_artifact · test_screenshots
 eval/          Part B — gold.csv labels · doc_vectors.npz cached embeddings
 models/        router.joblib (committed) · all-MiniLM-L6-v2 (fetched, gitignored)
 ```
@@ -32,16 +33,29 @@ python3 -m venv venv
 # Part B only: vendors the sentence-embedding model into models/ (~87MB, once).
 # Skip it and Part B still runs, ranking lexically at 0.867 instead of 0.933.
 ./venv/bin/python -m src.qa.fetch_model
+
+# Part C only: the OCR engine. A system package, so pip cannot supply it.
+brew install tesseract                          # or: apt install tesseract-ocr
 ```
 
 ## 2. Tests
 
 ```bash
-./venv/bin/python -m pytest tests/ -q           # 84 passed
+./venv/bin/python -m pytest tests/ -q           # 104 passed
 ```
 
-Without `fetch_model`: 79 passed, 5 skipped. The skips are the fusion tests, which need to encode
-a query; each names the reason rather than failing, so green means green.
+Both optional setup steps above are skipped, not failed, when their dependency is missing, so
+green means green either way:
+
+| Setup done | Result |
+|---|---|
+| Both | 104 passed |
+| No `tesseract` | 95 passed, 9 skipped |
+| No `fetch_model` | 99 passed, 5 skipped |
+| Neither | 90 passed, 14 skipped |
+
+The Part B skips are the fusion tests, which need to encode a query. The Part C skips are the ones
+that need OCR; its redaction tests are pure text and always run.
 
 ## 3. Part A — route classification
 
@@ -91,6 +105,21 @@ service = AnswerService()                       # loads the KB and vectors once
 result = service.answer("How long do I have to raise a dispute?", "2026-03-01")
 result.text, result.doc_ids, result.status      # -> "...within 60 days...", ["kb-031"], "answered"
 ```
+
+## 5. Part C — screenshot routing
+
+```bash
+# Routes every screenshot in a directory. Writes file,route,confidence,ocr_confidence,review,text.
+./venv/bin/python -m src.router.screenshots --dir starter/media/screenshots --output shots.csv
+
+# One screenshot, straight to stdout.
+./venv/bin/python -m src.router.screenshots --image starter/media/screenshots/txn-failed.png
+
+./venv/bin/python -m src.router.screenshot_eval # blur sweep: how routing degrades
+```
+
+Needs `brew install tesseract` from step 1. Reuses `models/router.joblib`, so there is no second
+model to build.
 
 ---
 
@@ -451,3 +480,173 @@ support team invented. The gold set is also too small to tune the fusion weight 
 Some test questions are reworded from `starter/questions.csv` rather than verbatim; one
 ("crypto backed **margin** loan") adds a second out-of-KB term and so makes abstention easier
 than the original question does. Worth knowing when reading the abstention numbers.
+
+---
+
+# Part C — Routing screenshots
+
+Stretch item. One modality, screenshots, routed into Part A's same four routes.
+
+```bash
+brew install tesseract                          # system package, pip cannot supply it
+
+./venv/bin/python -m src.router.screenshots --dir starter/media/screenshots
+./venv/bin/python -m src.router.screenshots --image starter/media/screenshots/txn-failed.png
+./venv/bin/python -m src.router.screenshots --dir starter/media/screenshots --output shots.csv
+
+./venv/bin/python -m src.router.screenshot_eval # the degradation table below
+```
+
+All three assets reach the right route, on redacted text, with no model beyond Part A's:
+
+| Asset | Route | Route conf | OCR conf |
+|---|---|---|---|
+| `login-error.png` | `account-access` | 0.981 | 86.1 |
+| `phishing-sms.png` | `fraud-report` | 0.515 | 94.3 |
+| `txn-failed.png` | `transaction-dispute` | 0.912 | 94.6 |
+
+Three files is a demonstration, not an evaluation, and nothing below is offered as an accuracy.
+
+## Why screenshots, and why OCR rather than a vision model
+
+Screenshots, because their text is **rendered, not photographed**. The pixels came out of a font
+renderer at a known size with no perspective, no motion blur and no background — the easy case for
+OCR, and the case where a vision model's extra capability buys nothing. Voice is the harder
+modality on every axis that matters here: it needs a real acoustic model rather than a system
+binary, it degrades on accent and crosstalk in ways I cannot bound from three clips, and its
+failure mode is a plausible wrong word rather than a visibly garbled one.
+
+OCR rather than a vision model, for the same reason: the task is transcription, and Tesseract is
+already at 86–95 mean word confidence on these assets. A vision model would earn its cost on
+layout reasoning — reading a chart, judging whether a UI state looks wrong — and none of the four
+routes needs that. The route is decided by *what the customer wrote*, which is text.
+
+The consequence worth stating: this reuses the Part A classifier unchanged, so a screenshot and a
+typed ticket are routed by the same model on the same four labels. Part C adds an extraction
+stage, not a second classifier with its own drift and its own retraining story.
+
+**Two passes, not one.** These screenshots are light-on-dark, and one pass is not enough:
+
+| Pass | `phishing-sms.png` words read | Blue bubble recovered |
+|---|---|---|
+| Default | 84 | no |
+| Luminance-thresholded | 72 | **yes** |
+| Union (shipped) | 136 | yes |
+
+The customer's own message — *"I didn't make that withdrawal. The code is 448120"* — is white on
+saturated blue. The default pass drops it **entirely**, and that line is the single most important
+one in the ticket: it is the admission that the customer sent the OTP. Inverting does not recover
+it, because the bubble collapses to mid-grey; a luminance threshold does. But the thresholded pass
+degrades faster on a soft image (13 words vs 65 at blur 2), so neither pass alone wins and the
+union takes what either one reads. Near-duplicate suppression across passes was tested and
+rejected: it changed no route and lowered fraud confidence slightly.
+
+## What it costs and what it adds in latency
+
+Measured on this machine, 8 cores, per screenshot at 780×1688:
+
+| Stage | Time (median of 5, across the 3 assets) |
+|---|---|
+| OCR pass 1 (default) | 430–499 ms |
+| OCR pass 2 (binarised) | 259–415 ms |
+| Binarise | 7–11 ms |
+| Classify redacted text | ~2 ms |
+| **Per ticket, end to end** | **689–932 ms** |
+| Model load | 7 ms, once per process |
+
+**Marginal cost per ticket is zero** — no API call, no per-token or per-image billing, no egress.
+The whole cost is ~1 s of CPU on a box that is already running. That is the strongest argument for
+this approach over a hosted vision model: at any volume, the bill is capacity rather than usage.
+
+The second pass adds 60–95% to the OCR time. That is the honest price of the blue bubble, and it
+buys the one line that makes `phishing-sms.png` a fraud report. Both passes are independent and
+would parallelise onto separate cores; I did not, because ~1 s is already well inside the latency
+budget of a ticket that a human will read minutes later. This is asynchronous triage, not an
+interactive path — screenshots arrive attached to a ticket, and the route needs to be right more
+than it needs to be fast.
+
+## When it degrades
+
+Blurring each asset progressively and re-routing — `screenshot_eval` — turns this from a promise
+into a table. 18 scans, 3 assets × 6 blur radii:
+
+| Outcome | Count |
+|---|---|
+| Routed without review, correct | 12 |
+| Routed without review, **wrong** | **0** |
+| Held for review | 6 (3 of which would have been correct) |
+
+Mean per-word OCR confidence gates the route at 60. Every scan that cleared the gate routed
+correctly; all three misroutings fell below it. The failures are the interesting part: every
+misroute lands on `general`, never on a wrong specific route. A soft screenshot loses its
+distinguishing vocabulary first and keeps its generic words, so **degradation pulls toward the
+harmless route rather than inventing a fraud report**. Route confidence falls alongside OCR
+confidence (`login-error.png`: 0.981 at blur 0 → 0.485 at blur 4), so the two signals agree rather
+than one masking the other. The drift is not monotonic — `phishing-sms.png` misroutes at blur 3 and
+lands back on `fraud-report` at blur 4 — which is another reason the gate reads legibility rather
+than treating route confidence as a proxy for it.
+
+What the gate is *not*: a correctness predictor. OCR confidence overlaps between right and wrong
+routes (correct scans span 22.7–94.6, wrong ones 37.0–43.0), so a low score does not mean the
+route is wrong — 3 of the 6 held scans were right. It measures **legibility**, and the guarantee it
+buys is narrow and worth stating precisely: no unreviewed route rests on text nobody could read.
+The cost is 3 needless reviews out of 18. I would rather pay that than route a fraud report from a
+fragment.
+
+Two failures degrade differently and are handled separately. **No text at all** returns `review`
+with a null route and never reaches the classifier, because an unreadable image is a failed read,
+not a `general` ticket. **A dropped word** is the mode with no gate at all — a missing word lowers
+no confidence score, and the union of two passes is the mitigation precisely because a word one
+pass loses the other may keep.
+
+## Where these get processed, and why that is the whole design
+
+The extracted text from three synthetic screenshots contains: an email address, a phone number, a
+6-digit OTP the customer admits sending, a Bitcoin address, a `$4,500.00` balance and a
+transaction reference. A real support queue's screenshots would contain card numbers and
+government IDs. **A screenshot is the highest-risk attachment in support**, because the customer
+chose the crop, not you — they photograph the whole screen, including what you never asked for.
+
+That forces two decisions.
+
+**Processing stays local.** OCR is a system binary and the classifier is a 228 KB local artifact,
+so pixels and extracted text never cross a network boundary. Sending these to a hosted vision API
+would mean an OTP and a wallet address in a third party's request logs — retained on their
+schedule, replicated to their regions, inside their subprocessor list, and possibly a training
+corpus. That is a data-processing agreement, a cross-border transfer question and a breach-
+notification surface, acquired to save ~1 s of CPU on a task a local binary already does at 86–95
+confidence. The cheaper option is also the one that keeps the data in-house, which is why the
+recommendation does not depend on the cost argument holding.
+
+**Identifiers are redacted before classification, not after.** Each pattern collapses to its
+category name — `[otp]`, `[wallet]`, `[email]` — so the redaction is what the model sees and what
+lands in the CSV, and no downstream store ever holds the value:
+
+| Asset | Redacted | Route before | Route after |
+|---|---|---|---|
+| `login-error.png` | email | `account-access` 0.979 | `account-access` 0.981 |
+| `phishing-sms.png` | wallet, phone, otp | `fraud-report` 0.517 | `fraud-report` 0.515 |
+| `txn-failed.png` | — | `transaction-dispute` 0.912 | `transaction-dispute` 0.912 |
+
+**Redaction is free.** No route changes and confidence moves by under 0.01, which is the point:
+the route is decided by the customer's complaint, not by the digits in it. The category name is
+kept deliberately — *that* an OTP was sent is the fraud signal, its value is only liability.
+
+Two things this does not do. Ordering matters and is tested: `wallet` runs before `phone`, or the
+digit-run pattern eats the middle of an all-digit address and leaves the `bc1q` prefix behind.
+And redaction is text-only — **the source PNG still contains everything**, so retention and
+access control on the stored image is the unsolved half. The routed text is clean; the attachment
+it came from is not, and a real deployment needs an image-retention policy to match.
+
+## Limits
+
+Three assets, all synthetic, all clean renders from one design system, all English, all portrait
+at one resolution. That is enough to demonstrate the pipeline and to characterise how it fails
+under blur; it cannot support an accuracy claim, a threshold tuned to two significant figures, or
+any statement about photographed screens, other languages or other apps. `MIN_OCR_CONFIDENCE = 60`
+separates 15 clean scans from 3 misroutes on this handful — it is a defensible starting point, not
+a calibrated value, and the first real batch should move it.
+
+The blur sweep is one degradation axis. JPEG artefacts, downscaling, glare, rotation and partial
+crops all break OCR differently and none is tested here. Redaction is pattern-based, so it
+catches the identifier shapes it knows and would miss a national ID format nobody added.
