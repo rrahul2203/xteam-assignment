@@ -3,9 +3,9 @@
     python3 -m src.qa.answer_cli --input questions.csv --output answers.csv
     python3 -m src.qa.answer_cli --question "What is the withdrawal fee?" --as-of 2025-06-01
 
-Writes `qid`, `answer` and `doc_ids` (semicolon separated), per the brief. Declined questions
-get an empty `doc_ids` and a plain-words answer, so abstention is distinguishable from a crash.
-`--verbose` adds the status and scores that the evaluation thresholds on.
+Writes `qid`, `answer` and `doc_ids` (semicolon separated), per the brief. Declined questions get
+an empty `doc_ids` and a plain-words answer, so abstention is distinguishable from a crash.
+`--verbose` adds the status and score columns that the evaluation thresholds on.
 """
 import argparse
 import csv
@@ -42,7 +42,7 @@ def main(argv=None):
 
     if args.question:
         result = service.answer(args.question, require_date(args.as_of, "--as-of"))
-        # The answer is the payload, so it goes to stdout; diagnostics go to the log.
+        # Answer to stdout so it can be piped; diagnostics go to the log instead.
         print(result.text)
         print(f"\ndoc_ids: {result.doc_ids_field() or '(none)'}  [{result.status}]")
         return

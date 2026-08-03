@@ -1,27 +1,16 @@
-"""Turning a ranked hit into a grounded answer, or declining to.
+"""Turns a ranked hit into a grounded answer, or declines to answer.
 
-Answers are extractive: the text returned is sentences copied from the document. Nothing
-paraphrases, so an answer cannot drift from its source, and `doc_ids` is checkable by reading
-the file. That is the whole grounding argument -- no LLM is involved.
+Answers are extractive: the returned text is sentences copied from the cited document, so no
+LLM is involved and grounding is structural rather than promised.
 
-Three outcomes, not two. ANSWERED and UNANSWERED are obvious; LAPSED is the one worth
-arguing for. When the only relevant document expired before `as_of`, "no, and here is the
-window that closed" is a real answer carrying real information, so abstaining there would
-throw away something the system knows.
+Returns one of three statuses. ANSWERED and UNANSWERED are the usual pair; LAPSED covers the
+case where the only relevant document expired before `as_of`, which is reported as a negative
+answer naming the closed window rather than as an abstention.
 
-Abstention thresholds two signals together rather than one. Cosine on its own is a poor
-discriminator here: it is length-normalised, so a question sharing a couple of words with a
-short document scores like one sharing many with a long document.
-
-The signal that does discriminate is *which* question words are missing rather than how many.
-An undocumented topic tends to carry a domain noun found nowhere in the corpus, while an
-answerable question is typically missing only filler and dates, and a plain count treats those
-alike. So both must hold to decline: a long unmatched term is present AND the top document
-covers little of the question's rare vocabulary. eval_answers.py prints the distributions and
-the threshold sweep the cutoffs were read off.
-
-A lapsed document faces the same coverage bar without the absent-term escape, since announcing
-an unrelated expiry is a confidently wrong answer rather than a helpful one.
+Abstention thresholds two signals jointly: an unmatched question word long enough to be a
+domain noun, and the share of the question's rare vocabulary the top document covers. Cosine is
+not used for this, being length-normalised and so insensitive to how much of the question a
+document accounts for. Cutoffs come from the sweep in eval_answers.py.
 """
 import logging
 import math
@@ -43,11 +32,10 @@ UNANSWERED = "unanswered"
 
 MAX_SENTENCES = 2
 
-# Both cutoffs come from the sweep in eval_answers.py.
-# Minimum length for an absent question word to count as a domain noun rather than filler,
-# since short unmatched tokens tend to be dates and contractions.
+# Both cutoffs are set from the threshold sweep in eval_answers.py.
+# Length at which an unmatched question word counts as a domain noun rather than filler.
 MIN_DOMAIN_TERM_LENGTH = 6
-# Share of the question's IDF-weighted vocabulary that the top document must cover.
+# Share of the question's IDF-weighted vocabulary the top document must cover to answer.
 MIN_SALIENT_COVERAGE = 0.35
 
 REFUSAL = (
@@ -55,15 +43,13 @@ REFUSAL = (
     "so this needs a human agent."
 )
 
-# sklearn's list rather than a hand-rolled one: it covers the grammar words that inflate the
-# coverage signal while leaving domain terms alone, which is the split this metric needs.
-# Extended with ordinary English words a financial KB would not contain, since their absence
-# says nothing about whether the topic is documented.
+# Words excluded from the coverage and absent-term signals. sklearn's list supplies the grammar
+# words; the additions are ordinary English a financial KB would not contain anyway.
 _STOP = frozenset(ENGLISH_STOP_WORDS) | frozenset("""
 money moved fast happens pay long need want know like make going lost use using make sure
 """.split())
 
-# Question words that ask for a quantity, so an answer without a number is suspect.
+# Words marking a question as asking for a quantity, used to prefer sentences with numbers.
 _NUMERIC_CUES = frozenset("""
 how much how many what fee rate limit cap ceiling cost charge percent long
 """.split())
@@ -97,12 +83,11 @@ def content_words(text):
 
 
 def _stem(word):
-    """Crude suffix strip, so an inflected question word matches its KB form.
+    """Strips inflectional suffixes so a question word matches its KB form.
 
-    Applied to the KB and the query through the same function, so the two sides always agree.
-    Longest suffixes first and stripping iterated, so plural and past forms of a word converge
-    on the stem its base form reaches. The length guard stops short words eroding into
-    collisions.
+    Tries the longest suffix first and repeats, so plural and past forms converge on the stem
+    the base form reaches. The length guard stops short words eroding into collisions. Both the
+    KB and the query pass through here, so the two sides always agree.
     """
     stem = word
     for _ in range(2):
@@ -119,8 +104,8 @@ def _stem(word):
 def kb_vocabulary(docs):
     """Every stemmed content word appearing anywhere in the KB, at any date.
 
-    Deliberately date-blind: the question is whether the product documents this topic at all,
-    which is separate from which version applies.
+    Built date-blind on purpose: it answers whether a topic is documented at all, which is a
+    separate question from which version of it applies.
     """
     vocabulary = set()
     for doc in _values(docs):
@@ -132,8 +117,8 @@ def kb_vocabulary(docs):
 def missing_mass(question, vocabulary):
     """Share of the question's content words that appear nowhere in the KB.
 
-    Reported for diagnostics only. It is not thresholded on, because a count cannot tell a
-    missing domain noun from a missing date, which is why the abstention rule pairs signals.
+    Carried on the Answer for diagnostics and not thresholded on: a count cannot tell a missing
+    domain noun from a missing date, which is what absent_domain_terms looks at instead.
     """
     words = content_words(question)
     if not words:
@@ -162,8 +147,8 @@ def document_frequencies(docs):
 def salient_coverage(question, doc, frequencies, n_docs):
     """Share of the question's IDF-weighted vocabulary that `doc` contains.
 
-    Weighting by rarity is the point: matching a question's common words while missing its one
-    rare noun should score as covering nothing that mattered.
+    Weighting each term by rarity means a document matching only the question's common words
+    scores near zero, where an unweighted overlap would credit it.
     """
     asked = {_stem(w) for w in content_words(question)}
     if not asked:
@@ -185,11 +170,10 @@ def _wants_number(question):
 
 
 def extract(question, doc, limit=MAX_SENTENCES):
-    """The `limit` body sentences that best overlap the question, in document order.
+    """The `limit` body sentences that best overlap the question, returned in document order.
 
-    Overlap is on stems. A sentence carrying a number is nudged up when the question asks for a
-    quantity, which guards against citing the right document but quoting a sentence that omits
-    the figure asked for.
+    Overlap is counted on stems. Sentences containing a digit get a small bonus when the
+    question asks for a quantity, so the quoted text carries the figure asked for.
     """
     sentences = doc.sentences()
     if not sentences:
@@ -223,7 +207,7 @@ class AnswerService:
         self.frequencies = document_frequencies(self.docs)
         self.min_score = min_score
         self.min_coverage = min_coverage
-        # Switchable so the ablation can show what the conjunction is worth.
+        # Switchable so eval_answers.py can ablate the second abstention signal.
         self.require_absent_term = require_absent_term
 
     def answer(self, question, as_of):
@@ -240,15 +224,13 @@ class AnswerService:
 
         coverage = salient_coverage(text, top.doc, self.frequencies, len(self.docs))
         absent = absent_domain_terms(text, self.vocabulary)
-        # Decline only when both signals agree; see the module docstring for why either alone
-        # is too weak. `require_absent_term` off drops the conjunction back to coverage.
+        # Decline only when both signals agree, unless the conjunction is ablated off.
         if coverage < self.min_coverage and (absent or not self.require_absent_term):
             return self._refuse(text, when, top, gap, coverage, absent)
 
         if top.is_lapsed:
-            # A closed notice speaks only when clearly on topic, so the same coverage bar
-            # applies here without the absent-term escape above. Below it, fall through to the
-            # best in-force hit rather than announce an expiry the question never asked about.
+            # Apply the coverage bar again here without the absent-term escape, so a thinly
+            # matching expired notice falls through to the best in-force hit instead.
             if coverage >= self.min_coverage:
                 return self._as_lapsed(text, when, top, gap, coverage)
             in_force_hits = [h for h in hits if not h.is_lapsed]

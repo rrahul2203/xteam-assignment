@@ -1,7 +1,7 @@
 """Tests for the date layer: which documents speak for a given date, and input validation.
 
-These are the tests worth having, because a bug here is silent. A wrong window does not
-raise -- it returns a confident answer from the wrong version of a policy.
+Covered closely because a bug here is silent: a wrong window does not raise, it returns a
+confident answer from the wrong version of a policy.
 """
 from datetime import date, timedelta
 
@@ -42,7 +42,7 @@ def write(tmp_path, text, name="kb-999.md"):
 
 
 class TestWindowBoundaries:
-    """Both ends of the window are inclusive. Off-by-one here is a wrong-version answer."""
+    """Both ends of the window are inclusive, so probe the days either side of each end."""
 
     @pytest.fixture
     def doc(self, tmp_path):
@@ -69,12 +69,12 @@ class TestWindowBoundaries:
         assert doc.has_lapsed(date(2026, 1, 21))
 
         replaced = load_doc(write(tmp_path, DOC.replace("superseded_by:", "superseded_by: kb-998")))
-        # The successor is in force and will be retrieved instead, so this is not the answer.
+        # With a successor set the replacement is retrieved instead, so this is not lapsed.
         assert not replaced.has_lapsed(date(2026, 1, 21))
 
 
 class TestMalformedInput:
-    """Bad metadata raises at load time rather than defaulting to something plausible."""
+    """Bad metadata must raise at load time rather than default to something plausible."""
 
     def test_missing_front_matter_raises(self, tmp_path):
         with pytest.raises(ValueError, match="front matter"):
@@ -114,10 +114,10 @@ class TestMalformedInput:
 
 
 class TestRealKnowledgeBase:
-    """Properties the shipped KB has to satisfy for date resolution to mean anything."""
+    """Properties the shipped KB has to hold for date resolution to be well defined."""
 
     def test_status_is_not_a_proxy_for_in_force(self, kb):
-        """Assert docs marked superseded were live on their own effective_date.
+        """Check documents marked superseded were in force on their own effective_date.
 
         This is why retrieval ignores `status`: it describes today, not the query date, so
         filtering on it could never answer a historical question correctly.
@@ -155,7 +155,7 @@ class TestRealKnowledgeBase:
             assert all(not d.superseded_by for d in lapsed(kb, day))
 
     def test_candidate_pools_do_not_overlap(self, kb):
-        """In-force and lapsed are disjoint by construction, since one pool is ranked."""
+        """The two candidate sets must not intersect, since they are ranked as one pool."""
         for day in (date(2025, 1, 1), date(2026, 3, 31), date(2026, 7, 28)):
             assert not {d.doc_id for d in in_force(kb, day)} & {d.doc_id for d in lapsed(kb, day)}
 

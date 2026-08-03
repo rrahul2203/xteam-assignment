@@ -1,17 +1,16 @@
-"""Measuring the retriever against a hand-labelled gold set.
+"""Scores the retriever against a hand-labelled gold set and prints the report.
 
     python3 -m src.qa.eval_answers
 
-Reported per stratum, not just in aggregate: one number would hide the failure modes, and the
-strata fail for different reasons. Historical and lapsed questions are the ones the date logic
-exists for and there are few of them, so every rate carries a Wilson interval.
+Prints four things: headline rates, the same rates per stratum, ablations, and a threshold
+sweep. Rates are broken out per stratum because the strata fail for different reasons, and each
+carries a Wilson interval since the historical and lapsed groups are small.
 
-The ablations matter as much as the headline. If switching the date filter off does not move
-the score, the score is not measuring the thing this exercise is about.
+The ablations exist to check the headline measures what it claims to. Switching the date filter
+off should move the score; if it does not, the score is not sensitive to date resolution.
 
-Honest limitation, stated rather than buried: the same person wrote the system and the labels,
-and the gold set is small. This measures whether the date logic works. It cannot support a
-claim about generalisation to unseen questions.
+Limitation this cannot measure around: the same person wrote the system and the labels, and the
+gold set is small, so it supports no claim about generalisation to unseen questions.
 """
 import csv
 import logging
@@ -41,7 +40,7 @@ def load_gold(path=None):
             raise ValueError(f"{row['qid']} has unknown stratum {row['stratum']!r}")
         pattern = (row["must_match"] or "").strip()
         if pattern:
-            # Fail here rather than midway through scoring.
+            # Compile now so a malformed pattern raises at load, not midway through scoring.
             re.compile(pattern)
         gold[row["qid"]] = {
             "stratum": row["stratum"],
@@ -52,7 +51,7 @@ def load_gold(path=None):
 
 
 def wilson(successes, total, z=1.96):
-    """95% Wilson interval, chosen because the normal approximation breaks down at small n."""
+    """95% Wilson score interval, used because the normal approximation breaks down at small n."""
     if not total:
         return (0.0, 0.0)
     p = successes / total
@@ -80,9 +79,9 @@ def score_one(question, gold, answer, service):
         "doc_correct": top_correct,
         "fact_checked": bool(pattern),
         "fact_ok": fact_ok,
-        # The metric that decides whether this is shippable: answered confidently, wrong doc.
+        # Answered an answerable question but cited the wrong document.
         "wrong_answer": answer.answered and should_answer and not top_correct,
-        # Answered something that has no answer in the KB.
+        # Answered a question the KB has no answer for.
         "false_answer": answer.answered and not should_answer,
         "status": answer.status,
         "score": answer.score,
@@ -145,25 +144,23 @@ def _rate(rows, key):
 
 
 def ablations(questions, gold):
-    """Configurations that should each cost something measurable."""
+    """Re-scores the gold set with one design decision disabled at a time."""
     docs = load_kb()
     results = {}
 
     baseline = AnswerService(docs)
     results["shipped"] = summarise(evaluate(baseline, questions, gold))
 
-    # Date filter off: rank the whole KB regardless of as_of. This is the ablation that
-    # matters -- it should wreck the historical stratum specifically.
+    # Rank the whole KB regardless of as_of, which should cost the historical stratum most.
     undated = AnswerService(docs)
     undated.retriever.candidates = lambda as_of: list(docs.values())
     results["no_date_filter"] = summarise(evaluate(undated, questions, gold))
 
-    # Abstention off: always answer the top hit, however weak.
+    # Drop both abstention thresholds, so the top hit always answers however weak.
     eager = AnswerService(docs, min_score=0.0, min_coverage=0.0)
     results["no_abstention"] = summarise(evaluate(eager, questions, gold))
 
-    # Coverage alone, without requiring an absent domain term: shows what the conjunction
-    # buys over the single signal.
+    # Keep the coverage threshold but drop the absent-term half of the conjunction.
     coverage_only = AnswerService(docs, require_absent_term=False)
     results["coverage_only"] = summarise(evaluate(coverage_only, questions, gold))
 
@@ -171,7 +168,7 @@ def ablations(questions, gold):
 
 
 def threshold_sweep(questions, gold, thresholds=(0.0, 0.15, 0.25, 0.35, 0.45, 0.55, 0.70)):
-    """What each coverage threshold buys and costs, so the choice is a curve not a claim."""
+    """Re-scores at a range of coverage thresholds, so the chosen one is visible on a curve."""
     docs = load_kb()
     sweep = []
     for threshold in thresholds:
@@ -189,7 +186,7 @@ def report():
     log.info("gold set: %d questions", summary["n"])
     log.info("document accuracy      %.3f   (answerable questions, right doc cited)",
              summary["doc_accuracy"])
-    log.info("wrong-answer rate      %.3f   <- the one that decides shippability",
+    log.info("wrong-answer rate      %.3f   (answered confidently, cited the wrong doc)",
              summary["wrong_answer_rate"])
     log.info("answer recall          %.3f   (answerable questions actually answered)",
              summary["answer_recall"])

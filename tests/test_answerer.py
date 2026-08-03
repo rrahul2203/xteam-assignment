@@ -1,8 +1,8 @@
 """Tests for answering: date resolution end to end, abstention, and the output contract.
 
-The central test is `test_same_question_two_dates_two_answers`: the same question asked either
-side of a policy change has to come back with different documents. That is the failure mode
-the brief names, and the one a test can pin down directly.
+`test_same_question_two_dates_two_answers` is the central one: it asks a single question either
+side of a policy change and requires different documents back. That covers the failure mode the
+brief names, and is the one a test can pin down directly.
 """
 from datetime import date
 
@@ -25,10 +25,10 @@ DISPUTE_QUESTION = "How many days does a customer have to raise a dispute?"
 
 
 class TestDateResolution:
-    """The point of the exercise: right answer for the date asked, not for today."""
+    """Answers must resolve to the document in force on the date asked, not on today."""
 
     def test_same_question_two_dates_two_answers(self, service):
-        """One policy, two versions, and the query date decides which one speaks."""
+        """Ask one question at two dates spanning a version change and compare the citations."""
         during_v1 = service.answer(DISPUTE_QUESTION, date(2026, 3, 1))
         during_v2 = service.answer(DISPUTE_QUESTION, date(2026, 7, 28))
 
@@ -42,7 +42,7 @@ class TestDateResolution:
         assert service.answer(DISPUTE_QUESTION, date(2026, 7, 1)).doc_ids == ["kb-032"]
 
     def test_a_future_document_cannot_answer_an_earlier_question(self, service):
-        """No answer may cite a document that had not taken effect yet."""
+        """Check no cited document has an effective_date later than the query date."""
         when = date(2026, 3, 1)
         for question in (DISPUTE_QUESTION, "What is the fee to withdraw funds?"):
             result = service.answer(question, when)
@@ -50,7 +50,7 @@ class TestDateResolution:
                 assert service.docs[doc_id].effective_date <= when
 
     def test_every_cited_document_was_in_force_or_a_lapsed_notice(self, service):
-        """Sweep the shipped question set: no answer ever cites an out-of-window document."""
+        """Run the shipped question set and check every citation was live on its own date."""
         for question in load_questions():
             result = service.answer(question["question"], question["as_of"])
             for doc_id in result.doc_ids:
@@ -60,7 +60,7 @@ class TestDateResolution:
 
 
 class TestLapsedNotices:
-    """An expired notice with no successor is a real negative answer, not an abstention."""
+    """An expired notice with no successor answers in the negative instead of abstaining."""
 
     def test_expired_promotion_answers_in_the_negative(self, service):
         result = service.answer("Is the invite a friend promotion still running?",
@@ -69,7 +69,7 @@ class TestLapsedNotices:
         assert result.doc_ids == ["kb-092"]
         assert result.answered
         assert "no longer" in result.text.lower()
-        # The reply has to name the date the window closed, not just refuse.
+        # Read the closing date off the document, so the assertion survives a KB edit.
         assert service.docs["kb-092"].valid_until.isoformat() in result.text
 
     def test_the_same_promotion_answers_positively_inside_its_window(self, service):
@@ -79,7 +79,7 @@ class TestLapsedNotices:
         assert result.doc_ids == ["kb-092"]
 
     def test_an_off_topic_lapsed_notice_does_not_speak(self, service):
-        """A weakly-matching expired notice must not announce an irrelevant expiry."""
+        """Ask an unrelated question and check no expiry is announced for it."""
         result = service.answer(
             "I lost my phone and cannot complete two-factor authentication. "
             "How do I get back into my account?", date(2026, 7, 28))
@@ -87,7 +87,7 @@ class TestLapsedNotices:
 
 
 class TestAbstention:
-    """Declining is a designed outcome, so it has a contract of its own."""
+    """Declining is a designed outcome, so it has an output contract of its own."""
 
     @pytest.mark.parametrize("question", [
         "What interest rate do you charge on a crypto backed margin loan?",
@@ -105,7 +105,7 @@ class TestAbstention:
         assert not result.answered and result.doc_ids_field() == ""
 
     def test_absent_domain_terms_ignores_short_filler(self, service):
-        """Dates and short words absent from the KB must not trigger abstention."""
+        """Short absent words must not count as domain terms, long ones must."""
         assert absent_domain_terms("what is the fee today in march", service.vocabulary) == []
         assert "chargeback" in absent_domain_terms(
             "how do I file a chargeback", service.vocabulary)
@@ -114,12 +114,12 @@ class TestAbstention:
 class TestOutputContract:
     def test_doc_ids_field_is_semicolon_separated(self, service):
         result = service.answer(DISPUTE_QUESTION, date(2026, 3, 1))
-        assert ";" not in result.doc_ids_field()  # single doc, no stray separator
+        assert ";" not in result.doc_ids_field()  # one doc, so no separator
         result.doc_ids = ["kb-031", "kb-032"]
         assert result.doc_ids_field() == "kb-031;kb-032"
 
     def test_answer_text_is_copied_from_the_cited_document(self, service):
-        """Check every returned sentence appears in the cited body, so nothing paraphrases."""
+        """Check each returned sentence appears verbatim in the cited body."""
         result = service.answer(DISPUTE_QUESTION, date(2026, 3, 1))
         body = service.docs[result.doc_ids[0]].body
         for sentence in result.text.split(". "):

@@ -1,12 +1,11 @@
-"""Loading KB documents and deciding which of them speak for a given date.
+"""Loads KB documents and decides which of them speak for a given date.
 
 The front matter is flat `key: value`, so it is parsed here rather than pulling in a YAML
 dependency.
 
-The rule that matters: `status` is never consulted when deciding what is in force. `status`
-describes today, and a question can ask about any date, so only `effective_date` and
-`valid_until` decide. Treating `status: superseded` as a filter is precisely how a system
-answers a 2025 question with a 2026 policy.
+The rule that matters: `status` is never consulted when deciding what is in force, only
+`effective_date` and `valid_until`. `status` describes today while a question can ask about any
+date, so filtering on it is how a system ends up answering a question with a later policy.
 """
 import csv
 import logging
@@ -45,7 +44,7 @@ class Doc:
         return self.valid_until is None or as_of <= self.valid_until
 
     def has_lapsed(self, as_of):
-        """Window has closed and no successor took over, so the document is the answer."""
+        """True when the window closed before `as_of` and no successor took over."""
         return (
             not self.superseded_by
             and self.valid_until is not None
@@ -193,10 +192,10 @@ def in_force(docs, as_of):
 
 
 def lapsed(docs, as_of):
-    """Expired documents with no successor -- their expiry is itself the answer.
+    """Expired documents with no successor, whose expiry is itself the answer.
 
-    Superseded documents are excluded: their replacement is in force and will be retrieved
-    normally, so reporting the old one as "lapsed" would be wrong.
+    Superseded documents are excluded, since their replacement is in force and will be retrieved
+    normally.
     """
     return [d for d in _values(docs) if d.has_lapsed(as_of)]
 

@@ -1,4 +1,4 @@
-"""Shared fixtures. The KB is loaded once per session -- parsing it is the slow part."""
+"""Shared fixtures. Session-scoped because parsing the KB is the slow part of a run."""
 import sys
 from pathlib import Path
 

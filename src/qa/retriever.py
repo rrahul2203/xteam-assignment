@@ -1,13 +1,12 @@
 """Date-filtered TF-IDF retrieval over the KB.
 
-Filter first, rank second. Ranking the whole KB and then dropping out-of-window hits would
-let a superseded document win and be discarded, leaving a worse in-force document unranked;
-filtering first means the candidate set only ever contains documents that spoke for the date
-being asked about.
+Filters to the documents in force for the query date, then ranks only those. Ranking first and
+dropping out-of-window hits afterwards would let a superseded document win and be discarded,
+leaving a worse in-force document unranked.
 
 Features are word plus character n-grams, for the reason Part A's model.py gives: character
-features let an unseen phrasing match on shared substrings and absorb typos. The vectoriser
-is refitted per query date, because the corpus itself changes with `as_of`.
+features let an unseen phrasing match on shared substrings and absorb typos. The vectoriser is
+refitted per query date, since the candidate corpus changes with `as_of`.
 """
 import logging
 from dataclasses import dataclass
@@ -24,7 +23,7 @@ log = logging.getLogger(__name__)
 WORD_NGRAMS = (1, 2)
 CHAR_NGRAMS = (3, 5)
 
-# Below this cosine, the top hit is treated as no hit. Set by the sweep in eval_answers.py.
+# Cosine below which the top hit is treated as no hit. Set from the sweep in eval_answers.py.
 MIN_SCORE = 0.08
 
 
@@ -72,12 +71,11 @@ class Retriever:
         self.docs = docs if docs is not None else load_kb()
 
     def candidates(self, as_of):
-        """Everything eligible to answer for `as_of`.
+        """Documents eligible to answer for `as_of`: in force, plus expired-and-never-replaced.
 
-        In-force documents plus closed-and-never-replaced notices. Both go into one pool so
-        they are ranked by a single fitted vectoriser: cosines from two different fits are not
-        comparable, and comparing them across pools makes a small pool look artificially
-        strong. `Hit.is_lapsed` tells the caller which kind won.
+        Returned as one pool so a single fitted vectoriser ranks both kinds. Cosines from two
+        separate fits are not comparable, and scoring a small pool on its own fit inflates it.
+        `Hit.is_lapsed` tells the caller which kind won.
         """
         return in_force(self.docs, as_of) + lapsed(self.docs, as_of)
 
@@ -95,7 +93,7 @@ class Retriever:
             matrix = vectoriser.fit_transform(corpus)
             query = vectoriser.transform([text])
         except ValueError:
-            # Every term was a stop word or below min_df, so nothing is comparable.
+            # Raised when every term is a stop word or below min_df, leaving no shared features.
             log.debug("no usable features for %r", text)
             return []
 
