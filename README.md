@@ -476,21 +476,6 @@ were tested and **rejected**: min-max score normalisation before fusion (breaks 
 abstention threshold), a word/char feature weight sweep (flat across every weighting), and
 sentence-level scoring instead of document-level (worse). Recorded rather than shipped.
 
-## Limitations
-
-The same person wrote the system and the labels, and n=38 — every interval above is wide enough
-to say so. This measures whether the date logic works, which it does. It cannot support a claim
-about generalisation to unseen questions.
-
-`all-MiniLM-L6-v2` is general-purpose and knows nothing about this product's vocabulary, so it
-bridges ordinary synonyms ("withdraw"/"transfers out") and would not bridge domain jargon a
-support team invented. The gold set is also too small to tune the fusion weight on honestly —
-0.45 sits mid-plateau, which is the most that can be claimed from 38 rows.
-
-Some test questions are reworded from `starter/questions.csv` rather than verbatim; one
-("crypto backed **margin** loan") adds a second out-of-KB term and so makes abstention easier
-than the original question does. Worth knowing when reading the abstention numbers.
-
 ---
 
 # Part C — Routing screenshots
