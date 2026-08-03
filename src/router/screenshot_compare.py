@@ -18,6 +18,9 @@ same route everywhere still scores on whichever assets happen to match it. A tra
 follows, asking the model to read the screenshot rather than route it, since the case for a vision
 model is that it reads what OCR cannot.
 
+Both tiers call the same code the shipped router calls -- `screenshots.extract_text` and
+`vlm_reader` -- so what is measured here is what `--reader ocr` and `--reader vlm` actually do.
+
 The VLM tier is skipped unless --vlm points at a local model directory, so this runs on a clone
 without a 1GB download and reports what it could not measure rather than failing.
 """
@@ -31,19 +34,10 @@ from pathlib import Path
 
 from PIL import Image, ImageFilter
 
+from . import vlm_reader
 from .artifact import load_model
 from .predict import classify
 from .screenshots import can_read, extract_text, find_images, redact
-
-# The transformers stack is optional and heavy, so the import failure is caught once here rather
-# than at the call site.
-try:
-    import torch
-    from transformers import AutoModelForImageTextToText, AutoProcessor
-except ImportError:
-    torch = None
-    AutoModelForImageTextToText = None
-    AutoProcessor = None
 
 log = logging.getLogger(__name__)
 
@@ -62,38 +56,19 @@ ROUTES = ("account-access", "fraud-report", "general", "transaction-dispute")
 
 ROUTE_PROMPT = ("This is a screenshot from a customer support ticket. Choose exactly one route "
                 f"from: {', '.join(ROUTES)}. Answer with the route name only.")
-READ_PROMPT = "Transcribe all of the text visible in this screenshot, exactly as it appears."
 
 # The line that decides the fraud route on phishing-sms.png: the customer admitting they passed on
 # a one-time code. It is white on saturated blue, which is what the second OCR pass exists for.
 BUBBLE_MARKER = "448120"
 
 
-def can_use_vlm(path):
-    return AutoProcessor is not None and path is not None and Path(path).is_dir()
+def vlm_route(loaded, image):
+    """Route an image with the model directly, reading the label out of its prose reply.
 
-
-def load_vlm(path):
-    processor = AutoProcessor.from_pretrained(path)
-    model = AutoModelForImageTextToText.from_pretrained(path, dtype=torch.float32)
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    return processor, model.to(device).eval(), device
-
-
-def ask_vlm(processor, model, device, image, prompt, max_new_tokens=16):
-    """Put one image and one instruction to the model and return its reply as text."""
-    messages = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
-    chat = processor.apply_chat_template(messages, add_generation_prompt=True)
-    inputs = processor(text=chat, images=[image.convert("RGB")], return_tensors="pt").to(device)
-    with torch.no_grad():
-        generated = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-    return processor.batch_decode(generated[:, inputs["input_ids"].shape[1]:],
-                                  skip_special_tokens=True)[0].strip()
-
-
-def vlm_route(processor, model, device, image):
-    """Route an image with the model directly, reading the label out of its prose reply."""
-    reply = ask_vlm(processor, model, device, image, ROUTE_PROMPT)
+    This is the one-step alternative the shipped pipeline does not offer: no text is produced, so
+    there is nothing to redact or show a reviewer. It is measured here to show what that buys.
+    """
+    reply = vlm_reader.ask(*loaded, image, ROUTE_PROMPT, max_new_tokens=16)
     lowered = reply.lower()
     for label in ROUTES:
         if label in lowered:
@@ -143,13 +118,16 @@ def measure(paths, route_fn):
     return hits_by_radius, answers, latencies
 
 
-def transcription_probe(paths, processor, model, device):
-    """Print what each tier returns when asked to read one screenshot rather than route it."""
+def transcription_probe(paths, loaded):
+    """Print what each reader returns when asked to read one screenshot rather than route it.
+
+    This runs the vision model through the same `vlm_reader.transcribe` the shipped `--reader vlm`
+    uses, so what is printed here is what that backend would hand the classifier.
+    """
     print("\nAsked to transcribe rather than route:")
     for path in paths:
         words = len(ocr_text(Image.open(path)).split())
-        with Image.open(path) as image:
-            reply = ask_vlm(processor, model, device, image, READ_PROMPT, max_new_tokens=64)
+        reply, _ = vlm_reader.transcribe(loaded, path)
         print(f"  {path.name}")
         print(f"    ocr : {words} words")
         print(f"    vlm : {reply!r}")
@@ -166,9 +144,9 @@ def report(vlm_path=None):
         log.warning("skipping ocr: needs the tesseract binary, brew install tesseract")
 
     vlm = None
-    if can_use_vlm(vlm_path):
-        vlm = load_vlm(vlm_path)
-        tiers.append(("vlm", lambda image: vlm_route(*vlm, image)))
+    if vlm_reader.can_read(vlm_path):
+        vlm = vlm_reader.load(vlm_path)
+        tiers.append(("vlm", lambda image: vlm_route(vlm, image)))
     else:
         log.warning("skipping vlm: pass --vlm with a local model directory")
 
@@ -198,7 +176,7 @@ def report(vlm_path=None):
               f"{'read' if found else 'missed'} by the two OCR passes.")
 
     if vlm:
-        transcription_probe(paths, *vlm)
+        transcription_probe(paths, vlm)
 
     print(f"\n{len(results)} of 2 tiers measured. Everything here ran on-device, so none of these "
           f"numbers carries a per-ticket fee.")

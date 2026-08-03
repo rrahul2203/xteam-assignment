@@ -7,7 +7,7 @@ into Part A's four routes. **[How to run everything](#how-to-run-it) is one sect
 
 ```
 src/router/    Part A — data · crossval · model · evaluate · predict · tune · artifact
-               Part C — screenshots · screenshot_eval · screenshot_compare
+               Part C — screenshots · vlm_reader · screenshot_eval · screenshot_compare
 src/qa/        Part B — kb · retriever · embeddings · answerer · eval_answers · answer_cli
                plus build_vectors · fetch_model (one-off setup)
 tests/         test_kb · test_retriever · test_answerer · test_artifact · test_screenshots
@@ -41,7 +41,7 @@ brew install tesseract                          # or: apt install tesseract-ocr
 ## 2. Tests
 
 ```bash
-./venv/bin/python -m pytest tests/ -q           # 32 passed
+./venv/bin/python -m pytest tests/ -q           # 33 passed
 ```
 
 Both optional setup steps above are skipped, not failed, when their dependency is missing, so
@@ -49,10 +49,10 @@ green means green either way:
 
 | Setup done | Result |
 |---|---|
-| Both | 32 passed |
-| No `tesseract` | 29 passed, 3 skipped |
-| No `fetch_model` | 30 passed, 2 skipped |
-| Neither | 27 passed, 5 skipped |
+| Both | 33 passed |
+| No `tesseract` | 30 passed, 3 skipped |
+| No `fetch_model` | 31 passed, 2 skipped |
+| Neither | 28 passed, 5 skipped |
 
 The Part B skips are the fusion tests, which need to encode a query. The Part C skips are the ones
 that need OCR; its redaction tests are pure text and always run.
@@ -66,7 +66,7 @@ interesting input:
 | `test_answerer.py` | 7 | One question at two dates returning different documents, lapsed notices answering in the negative, abstention on absent topics, answer text copied verbatim, rejected input |
 | `test_retriever.py` | 7 | Fusion arithmetic and the weight extremes, the vocabulary gap embeddings close, the lexical fallback when the optional model is missing, unit-norm document vectors |
 | `test_artifact.py` | 5 | A round trip predicting identically in label and confidence, recorded provenance, and that the prediction path loads or raises but never trains |
-| `test_screenshots.py` | 8 | Redaction of each identifier class and its ordering, the two-pass read recovering low-contrast text, and the review gate holding a blurred or unreadable scan |
+| `test_screenshots.py` | 9 | Redaction of each identifier class and its ordering, the two-pass read recovering low-contrast text, and the review gate holding a blurred scan, an unreadable one, or one from a reader that cannot score itself |
 
 ## 3. Part A — route classification
 
@@ -125,6 +125,10 @@ result.text, result.doc_ids, result.status      # -> "...within 60 days...", ["k
 
 # One screenshot, straight to stdout.
 ./venv/bin/python -m src.router.screenshots --image starter/media/screenshots/txn-failed.png
+
+# The other extraction backend. Measurably worse; see Part C for why it is still selectable.
+./venv/bin/python -m src.router.screenshots --dir starter/media/screenshots \
+    --reader vlm --vlm-path /path/to/SmolVLM-500M-Instruct
 
 ./venv/bin/python -m src.router.screenshot_eval # blur sweep: how routing degrades
 
@@ -574,6 +578,33 @@ Those are captions, not transcriptions. At this size the model describes the *ki
 never reads a line of it — so it cannot see the `448120` admission that decides the fraud route,
 and there is no intermediate output to inspect when it routes wrongly. OCR is 2.5× faster and
 returns text a human can check.
+
+**The choice is a flag, not a hardcoded assumption.** Extraction is pluggable, so the losing option
+is still runnable and the claim above is falsifiable rather than asserted:
+
+```bash
+./venv/bin/python -m src.router.screenshots --dir starter/media/screenshots   # --reader ocr default
+./venv/bin/python -m src.router.screenshots --dir starter/media/screenshots \
+    --reader vlm --vlm-path /path/to/SmolVLM-500M-Instruct
+```
+
+Both readers return `(text, confidence)` and feed the same Part A classifier, so `--reader` changes
+how the text is obtained and nothing else. Running the vision reader through the real pipeline is
+harsher than the benchmark above, because the captions are what actually reach the classifier:
+
+| Asset | Route from the caption | Expected |
+|---|---|---|
+| `login-error.png` | `account-access` | `account-access` ✓ |
+| `phishing-sms.png` | `transaction-dispute` | `fraud-report` ✗ |
+| `txn-failed.png` | `transaction-dispute` | `transaction-dispute` ✓ |
+
+2 of 3, and the one it gets wrong is the fraud ticket — routed to a billing queue on the strength of
+*"Screen shows a message alert."* All three are held for review anyway, for a structural reason: the
+vision reader reports **no per-word confidence**, so the legibility gate has nothing to threshold.
+Rather than let an unscored read inherit the pass a scored one gets, `route_image` holds every scan
+from a reader that cannot score itself, and the CSV leaves `ocr_confidence` empty. A backend with no
+confidence signal cannot be trusted unattended, which is a cost of the vision approach separate from
+its accuracy.
 
 The honest scope of that result: it rules out a **small local** VLM, which is the only tier I could
 measure here. A hosted frontier model would very likely transcribe these three images correctly, and

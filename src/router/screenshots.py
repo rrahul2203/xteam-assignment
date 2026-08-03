@@ -1,20 +1,28 @@
-"""Routing support screenshots into the four text routes, via local OCR.
+"""Routing support screenshots into the four text routes, via local text extraction.
 
     python3 -m src.router.screenshots --dir starter/media/screenshots
     python3 -m src.router.screenshots --image starter/media/screenshots/txn-failed.png
+    python3 -m src.router.screenshots --dir <dir> --reader vlm --vlm-path <model dir>
 
 Screenshots are the chosen modality because their text is rendered rather than photographed, so
 OCR reads back what a layout engine drew instead of inferring glyphs from a camera. The approach
 follows from that: extract text locally, then hand it to the Part A classifier, so this part adds
 a text-extraction stage rather than a second model to train and evaluate.
 
-Extraction runs Tesseract twice per image and unions the lines, because these screenshots are
-light-on-dark and the two passes fail on different text -- the default pass misses low-contrast
-bubbles, and the luminance pass reads those but loses more on a soft image. Identifiers are
-redacted from the text before it is classified or written.
+Extraction is pluggable, because "OCR or a vision model" is the open question this part exists to
+answer and hardcoding one would leave it unanswered. Both readers return (text, confidence) and the
+classifier is the same either way, so `--reader` changes how the text is obtained and nothing else.
+OCR is the default on measured grounds, not assumption -- see the README, and `screenshot_compare`
+for the run behind it.
 
-Both stages are local: OCR is a system binary and the classifier is a saved artifact, so pixels
-and extracted text never leave the machine. See the README for the measured cost of each choice.
+The OCR reader runs Tesseract twice per image and unions the lines, because these screenshots are
+light-on-dark and the two passes fail on different text -- the default pass misses low-contrast
+bubbles, and the luminance pass reads those but loses more on a soft image. Identifiers are redacted
+from the text before it is classified or written, whichever reader produced it.
+
+Every stage is local under either reader: OCR is a system binary, the vision model is a local
+checkout, and the classifier is a saved artifact, so pixels and extracted text never leave the
+machine. See the README for the measured cost of each choice.
 """
 import argparse
 import csv
@@ -24,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
+from . import vlm_reader
 from .artifact import load_model
 from .predict import classify
 
@@ -40,6 +49,10 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
+
+READER_OCR = "ocr"
+READER_VLM = "vlm"
+READERS = (READER_OCR, READER_VLM)
 
 # Luminance cut for the second OCR pass, on a 0-255 scale. Sits above the panel fills these
 # screenshots use and below their body text, so text of any hue binarises to black-on-white.
@@ -135,15 +148,24 @@ def redact(text):
     return text, found
 
 
-def route_image(pipeline, path):
+def route_image(pipeline, path, reader=None):
     """Route one screenshot, returning the redacted text, the route and both confidences.
+
+    `reader` is any callable taking a path and returning (text, mean word confidence), which is
+    what makes OCR and the vision model interchangeable here. A reader that cannot score its own
+    output returns None for the confidence, and every such scan is held: an unscored read is not
+    the same claim as a legible one, so it is not silently treated as one.
+
+    Defaulting to None and resolving to `extract_text` here rather than in the signature keeps the
+    lookup at call time, so the default follows the module attribute instead of the binding that
+    existed at import.
 
     `review` marks the scan as too degraded to trust rather than the route as wrong. The
     distinction is deliberate: a low-confidence scan sometimes routes correctly anyway, but it
     does so on a fragment, so the gate is there to keep an unreviewed route from resting on text
     nobody could read, not to predict which routes are mistakes.
     """
-    text, ocr_confidence = extract_text(path)
+    text, ocr_confidence = (reader or extract_text)(path)
     text, redacted = redact(" ".join(text.split()))
     if redacted:
         log.info("%s: redacted %s before classifying", Path(path).name, ", ".join(redacted))
@@ -155,6 +177,12 @@ def route_image(pipeline, path):
                 "ocr_confidence": 0.0, "review": True, "text": ""}
 
     route, confidence = classify(pipeline, [text])[0]
+    if ocr_confidence is None:
+        log.warning("%s: reader reports no confidence, sending %s to review",
+                    Path(path).name, route)
+        return {"file": Path(path).name, "route": route, "confidence": confidence,
+                "ocr_confidence": None, "review": True, "text": text}
+
     review = ocr_confidence < MIN_OCR_CONFIDENCE
     if review:
         log.warning("%s: OCR confidence %.1f below %.0f, sending %s to review",
@@ -167,23 +195,49 @@ def find_images(directory):
     return sorted(p for p in Path(directory).iterdir() if p.suffix.lower() in IMAGE_SUFFIXES)
 
 
+def build_reader(name, vlm_path=None):
+    """Resolve a reader name to the callable `route_image` takes, or exit explaining what is absent.
+
+    Both readers depend on something pip cannot install on its own -- a system binary for OCR, a
+    model checkout for the vision reader -- so the missing piece is named here rather than surfacing
+    as an import error deeper in.
+    """
+    if name == READER_OCR:
+        if not can_read():
+            raise SystemExit(
+                "OCR unavailable: needs the tesseract binary (brew install tesseract) and "
+                "pip install -r requirements.txt")
+        return extract_text
+
+    if not vlm_path:
+        raise SystemExit("--reader vlm needs --vlm-path pointing at a local model directory")
+    if not vlm_reader.can_read(vlm_path):
+        raise SystemExit(
+            f"vision reader unavailable: needs `pip install transformers torchvision` and a model "
+            f"directory at {vlm_path}")
+
+    log.warning("the vlm reader captions rather than transcribes at 500M parameters and routes "
+                "worse than OCR; see README Part C")
+    loaded = vlm_reader.load(vlm_path)
+    return lambda path: vlm_reader.transcribe(loaded, path)
+
+
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Route support screenshots via local OCR.")
+    p = argparse.ArgumentParser(description="Route support screenshots via local text extraction.")
     source = p.add_mutually_exclusive_group(required=True)
     source.add_argument("--dir", help="directory of screenshots to route")
     source.add_argument("--image", help="route a single screenshot and print the route")
     p.add_argument("--output", default=None, help="CSV to write, defaults to stdout only")
     p.add_argument("--model", default=None, help="saved model to load, defaults to models/")
+    p.add_argument("--reader", default=READER_OCR, choices=READERS,
+                   help="how to extract the text, defaults to ocr")
+    p.add_argument("--vlm-path", default=None, help="local model directory for --reader vlm")
     return p.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
-
-    if not can_read():
-        raise SystemExit(
-            "OCR unavailable: needs the tesseract binary (brew install tesseract) and "
-            "pip install -r requirements.txt")
+    reader = build_reader(args.reader, args.vlm_path)
 
     try:
         pipeline, _ = load_model(args.model)
@@ -194,12 +248,13 @@ def main(argv=None):
     if not paths:
         raise SystemExit(f"no images found in {args.dir}")
 
-    results = [route_image(pipeline, p) for p in paths]
+    results = [route_image(pipeline, p, reader=reader) for p in paths]
     for r in results:
         # The route is the payload, so it goes to stdout; the review flag rides with it because
         # a caller acting on the route needs to know whether it was trusted.
         flag = "\treview" if r["review"] else ""
-        print(f"{r['file']}\t{r['route']}\t{r['confidence']:.4f}\t{r['ocr_confidence']:.1f}{flag}")
+        scored = "n/a" if r["ocr_confidence"] is None else f"{r['ocr_confidence']:.1f}"
+        print(f"{r['file']}\t{r['route']}\t{r['confidence']:.4f}\t{scored}{flag}")
 
     if args.output:
         fields = ["file", "route", "confidence", "ocr_confidence", "review", "text"]
@@ -207,8 +262,9 @@ def main(argv=None):
             w = csv.DictWriter(f, fieldnames=fields)
             w.writeheader()
             for r in results:
+                scored = r["ocr_confidence"]
                 w.writerow({**r, "confidence": round(r["confidence"], 4),
-                            "ocr_confidence": round(r["ocr_confidence"], 1)})
+                            "ocr_confidence": "" if scored is None else round(scored, 1)})
         log.info("wrote %d rows to %s", len(results), args.output)
 
 

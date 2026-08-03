@@ -124,6 +124,19 @@ class TestRouting:
         assert result["route"] is None
         assert result["review"]
 
+    def test_a_reader_that_cannot_score_itself_is_always_held(self, pipeline, tmp_path):
+        """Swap in a reader returning None for the confidence, as the vision backend does.
+
+        The route still has to be produced, since the text was readable, but the legibility gate
+        has nothing to threshold -- and an unscored read is a weaker claim than a legible one, so
+        it must not inherit the pass that a scored read would get.
+        """
+        result = route_image(pipeline, tmp_path / "unused.png",
+                             reader=lambda path: ("I cannot log in to my account", None))
+        assert result["route"] == "account-access"
+        assert result["ocr_confidence"] is None
+        assert result["review"]
+
     def test_only_image_files_are_picked_up(self, tmp_path):
         for name in ("a.png", "b.jpg", "notes.txt", "data.csv"):
             (tmp_path / name).touch()
