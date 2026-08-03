@@ -41,7 +41,7 @@ brew install tesseract                          # or: apt install tesseract-ocr
 ## 2. Tests
 
 ```bash
-./venv/bin/python -m pytest tests/ -q           # 104 passed
+./venv/bin/python -m pytest tests/ -q           # 32 passed
 ```
 
 Both optional setup steps above are skipped, not failed, when their dependency is missing, so
@@ -49,13 +49,24 @@ green means green either way:
 
 | Setup done | Result |
 |---|---|
-| Both | 104 passed |
-| No `tesseract` | 95 passed, 9 skipped |
-| No `fetch_model` | 99 passed, 5 skipped |
-| Neither | 90 passed, 14 skipped |
+| Both | 32 passed |
+| No `tesseract` | 29 passed, 3 skipped |
+| No `fetch_model` | 30 passed, 2 skipped |
+| Neither | 27 passed, 5 skipped |
 
 The Part B skips are the fusion tests, which need to encode a query. The Part C skips are the ones
 that need OCR; its redaction tests are pure text and always run.
+
+One test per behaviour, probing several inputs in a loop where a behaviour has more than one
+interesting input:
+
+| File | Tests | Covers |
+|---|---|---|
+| `test_kb.py` | 5 | Window boundaries at both ends, lapsing, malformed front matter, and two properties of the shipped KB: one version of a lineage in force per day, and disjoint candidate pools |
+| `test_answerer.py` | 7 | One question at two dates returning different documents, lapsed notices answering in the negative, abstention on absent topics, answer text copied verbatim, rejected input |
+| `test_retriever.py` | 7 | Fusion arithmetic and the weight extremes, the vocabulary gap embeddings close, the lexical fallback when the optional model is missing, unit-norm document vectors |
+| `test_artifact.py` | 5 | A round trip predicting identically in label and confidence, recorded provenance, and that the prediction path loads or raises but never trains |
+| `test_screenshots.py` | 8 | Redaction of each identifier class and its ordering, the two-pass read recovering low-contrast text, and the review gate holding a blurred or unreadable scan |
 
 ## 3. Part A — route classification
 
@@ -267,8 +278,8 @@ asserts exactly this.
 
 Embeddings are the brief's "embeddings and no LLM" option. They are a required dependency, so the
 scores below are what a reviewer reproduces by default — but the service does not *break* without
-them: it ranks lexically, says so in the log, and scores 0.867 instead of 0.933. Three tests pin
-that fallback by simulating the dependency's absence.
+them: it ranks lexically, says so in the log, and scores 0.867 instead of 0.933. Two tests pin that
+fallback by simulating the dependency's absence.
 
 Commands are in [How to run it](#4-part-b--question-answering).
 

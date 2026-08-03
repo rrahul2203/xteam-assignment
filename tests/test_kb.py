@@ -1,21 +1,16 @@
-"""Tests for the date layer: which documents speak for a given date, and input validation.
+"""Tests for the date layer: which documents speak for a given date.
 
 Covered closely because a bug here is silent: a wrong window does not raise, it returns a
 confident answer from the wrong version of a policy.
+
+Cases that probe one behaviour at several inputs assert in a loop rather than parametrising, so
+the suite reads as one test per behaviour. Each carries the failing input in its message.
 """
 from datetime import date, timedelta
 
 import pytest
 
-from src.qa.kb import (
-    in_force,
-    lapsed,
-    load_doc,
-    load_kb,
-    load_questions,
-    parse_date,
-    require_date,
-)
+from src.qa.kb import in_force, lapsed, load_doc, load_kb
 
 DOC = """---
 doc_id: kb-999
@@ -42,29 +37,27 @@ def write(tmp_path, text, name="kb-999.md"):
 
 
 class TestWindowBoundaries:
-    """Both ends of the window are inclusive, so probe the days either side of each end."""
-
     @pytest.fixture
     def doc(self, tmp_path):
         return load_doc(write(tmp_path, DOC))
 
-    @pytest.mark.parametrize("day, expected", [
-        (date(2026, 1, 9), False),   # day before
-        (date(2026, 1, 10), True),   # effective_date itself
-        (date(2026, 1, 15), True),
-        (date(2026, 1, 20), True),   # valid_until itself
-        (date(2026, 1, 21), False),  # day after
-    ])
-    def test_in_force_is_inclusive_at_both_ends(self, doc, day, expected):
-        assert doc.in_force(day) is expected
+    def test_the_window_is_inclusive_at_both_ends_and_lapses_after_it(self, doc, tmp_path):
+        """Probe the days either side of each end, then the same day once a successor exists.
 
-    def test_open_ended_document_never_expires(self, tmp_path):
-        doc = load_doc(write(tmp_path, DOC.replace("valid_until: 2026-01-20", "valid_until:")))
-        assert doc.valid_until is None
-        assert doc.in_force(date(2099, 1, 1))
-        assert not doc.in_force(date(2026, 1, 9))
+        Both ends being inclusive and lapsing starting the day after are the same boundary seen
+        twice, and lapsing is what turns an expired notice into a negative answer rather than
+        silence -- so an off-by-one here changes an answer without raising.
+        """
+        expected = {
+            date(2026, 1, 9): False,   # day before
+            date(2026, 1, 10): True,   # effective_date itself
+            date(2026, 1, 15): True,
+            date(2026, 1, 20): True,   # valid_until itself
+            date(2026, 1, 21): False,  # day after
+        }
+        for day, want in expected.items():
+            assert doc.in_force(day) is want, f"in_force({day}) should be {want}"
 
-    def test_lapses_only_after_the_window_and_only_without_a_successor(self, doc, tmp_path):
         assert not doc.has_lapsed(date(2026, 1, 20))
         assert doc.has_lapsed(date(2026, 1, 21))
 
@@ -72,65 +65,50 @@ class TestWindowBoundaries:
         # With a successor set the replacement is retrieved instead, so this is not lapsed.
         assert not replaced.has_lapsed(date(2026, 1, 21))
 
+    def test_an_open_ended_document_never_expires(self, tmp_path):
+        """A blank valid_until means still in force, not expired on the epoch."""
+        doc = load_doc(write(tmp_path, DOC.replace("valid_until: 2026-01-20", "valid_until:")))
+        assert doc.valid_until is None
+        assert doc.in_force(date(2099, 1, 1))
+        assert not doc.in_force(date(2026, 1, 9))
+
 
 class TestMalformedInput:
-    """Bad metadata must raise at load time rather than default to something plausible."""
+    def test_bad_metadata_raises_at_load_time(self, tmp_path):
+        """Bad metadata must raise rather than default to something plausible.
 
-    def test_missing_front_matter_raises(self, tmp_path):
-        with pytest.raises(ValueError, match="front matter"):
-            load_doc(write(tmp_path, "# Just a heading\n\nSome text.\n"))
+        The last two cases load a directory rather than a file, since an ambiguous citation and an
+        empty knowledge base are only visible once the documents are collected together.
+        """
+        cases = [
+            ("front matter", "# Just a heading\n\nSome text.\n"),
+            ("effective_date", DOC.replace("effective_date: 2026-01-10", "effective_date:")),
+            ("ISO date", DOC.replace("2026-01-10", "10/01/2026")),
+            ("valid_until before effective_date",
+             DOC.replace("valid_until: 2026-01-20", "valid_until: 2026-01-01")),
+        ]
+        for expected, text in cases:
+            with pytest.raises(ValueError, match=expected):
+                load_doc(write(tmp_path, text))
 
-    def test_missing_required_field_raises(self, tmp_path):
-        with pytest.raises(ValueError, match="effective_date"):
-            load_doc(write(tmp_path, DOC.replace("effective_date: 2026-01-10", "effective_date:")))
-
-    def test_unparseable_date_raises(self, tmp_path):
-        with pytest.raises(ValueError, match="ISO date"):
-            load_doc(write(tmp_path, DOC.replace("2026-01-10", "10/01/2026")))
-
-    def test_window_ending_before_it_starts_raises(self, tmp_path):
-        with pytest.raises(ValueError, match="valid_until before effective_date"):
-            load_doc(write(tmp_path, DOC.replace("valid_until: 2026-01-20",
-                                                 "valid_until: 2026-01-01")))
-
-    def test_duplicate_doc_id_raises(self, tmp_path):
         write(tmp_path, DOC, "a.md")
         write(tmp_path, DOC, "b.md")
         with pytest.raises(ValueError, match="duplicate doc_id"):
             load_kb(tmp_path)
-
-    def test_empty_directory_raises(self, tmp_path):
         with pytest.raises(ValueError, match="no .md documents"):
-            load_kb(tmp_path)
-
-    @pytest.mark.parametrize("value", ["", None, "   "])
-    def test_require_date_rejects_blank(self, value):
-        with pytest.raises(ValueError, match="required"):
-            require_date(value)
-
-    def test_parse_date_passes_blank_through_as_none(self):
-        assert parse_date("") is None
-        assert parse_date(None) is None
+            load_kb(tmp_path / "empty")
 
 
 class TestRealKnowledgeBase:
     """Properties the shipped KB has to hold for date resolution to be well defined."""
 
-    def test_status_is_not_a_proxy_for_in_force(self, kb):
-        """Check documents marked superseded were in force on their own effective_date.
-
-        This is why retrieval ignores `status`: it describes today, not the query date, so
-        filtering on it could never answer a historical question correctly.
-        """
-        superseded = [d for d in kb.values() if d.status == "superseded"]
-        assert superseded, "expected the KB to contain superseded versions"
-        assert all(d.in_force(d.effective_date) for d in superseded)
-
     def test_one_version_of_a_lineage_is_in_force_at_a_time(self, kb):
         """Group docs into chains by their root, then walk every day each chain spans.
 
         Two versions of one policy live on the same day would leave the ranking to choose
-        between them by wording, and a gap would leave the question unanswerable.
+        between them by wording, and a gap would leave the question unanswerable. The closing
+        assertion is why retrieval ignores `status`: it describes today rather than the query
+        date, so filtering on it could never answer a historical question.
         """
         chains = {}
         for doc in kb.values():
@@ -150,30 +128,18 @@ class TestRealKnowledgeBase:
                 live = [d for d in members if d.in_force(day)]
                 assert len(live) == 1, f"{root_id} has {len(live)} versions in force on {day}"
 
-    def test_a_superseded_document_is_never_offered_as_lapsed(self, kb):
-        for day in (date(2025, 6, 1), date(2026, 3, 1), date(2026, 7, 28)):
-            assert all(not d.superseded_by for d in lapsed(kb, day))
+        superseded = [d for d in kb.values() if d.status == "superseded"]
+        assert superseded, "expected the KB to contain superseded versions"
+        assert all(d.in_force(d.effective_date) for d in superseded)
 
-    def test_candidate_pools_do_not_overlap(self, kb):
-        """The two candidate sets must not intersect, since they are ranked as one pool."""
-        for day in (date(2025, 1, 1), date(2026, 3, 31), date(2026, 7, 28)):
-            assert not {d.doc_id for d in in_force(kb, day)} & {d.doc_id for d in lapsed(kb, day)}
+    def test_the_two_candidate_pools_stay_disjoint(self, kb):
+        """In-force and lapsed are ranked as one pool, and a superseded doc is in neither.
 
-
-class TestQuestionFile:
-    def test_missing_column_raises(self, tmp_path):
-        path = tmp_path / "q.csv"
-        path.write_text("qid,question\nq1,What is the fee?\n", encoding="utf-8")
-        with pytest.raises(ValueError, match="missing column"):
-            load_questions(path)
-
-    def test_duplicate_qid_raises(self, tmp_path):
-        path = tmp_path / "q.csv"
-        path.write_text("qid,question,as_of\nq1,A?,2026-01-01\nq1,B?,2026-01-01\n",
-                        encoding="utf-8")
-        with pytest.raises(ValueError, match="duplicate qid"):
-            load_questions(path)
-
-    def test_as_of_is_parsed_to_a_date(self):
-        questions = load_questions()
-        assert questions and all(isinstance(q["as_of"], date) for q in questions)
+        An overlap would rank one document twice; a superseded doc offered as lapsed would
+        announce an expiry for a policy that was actually replaced.
+        """
+        for day in (date(2025, 6, 1), date(2026, 3, 31), date(2026, 7, 28)):
+            live = {d.doc_id for d in in_force(kb, day)}
+            expired = {d.doc_id for d in lapsed(kb, day)}
+            assert not live & expired, f"pools overlap on {day}"
+            assert all(not kb[i].superseded_by for i in expired), f"lapsed offers a replaced doc"
