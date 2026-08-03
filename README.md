@@ -142,24 +142,39 @@ asserts exactly this.
 
 Embeddings are the brief's "embeddings and no LLM" option, and they are optional rather than
 assumed. `sentence-transformers` is not in `requirements.txt`; without it the service ranks
-lexically and says so, and the whole suite still passes. Two tests simulate its absence.
+lexically, says so, and scores 0.867 instead of 0.933. Two tests simulate its absence.
 
 ## Running it
 
-```bash
-# Required. Runs everything, lexical ranking only.
-./venv/bin/pip install -r requirements.txt
+Two supported setups. **Both were verified from a clean `git clone` into an empty venv**, because
+"it works on my machine" is not a claim a reviewer can check:
 
-# Optional. Adds the semantic half of retrieval, which is what the numbers below were measured
-# with.
-./venv/bin/pip install -r requirements-embeddings.txt
-./venv/bin/python -m src.qa.fetch_model    # vendors the model into models/, ~87MB, once
+```bash
+# 1. Lexical only — no torch, no model download. Everything runs.
+python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+./venv/bin/python -m pytest tests/ -q      # 71 passed, 5 skipped
 ```
 
-`fetch_model` is what keeps inference off the network. Without a local copy the first question of
-the first run pays the download inside the answering path; with one, `load_model()` reads
-`models/all-MiniLM-L6-v2` and the model is loaded **once per process** — 0.44s at startup, then a
-flat 28ms per question with no reload. It skips files already present, so re-running it is free.
+The 5 skips are the fusion tests: they need to encode a query, which needs the model. They skip
+with a reason naming the install command rather than failing, so a green run means green.
+
+```bash
+# 2. Adds the semantic half, which is what the headline numbers were measured with.
+./venv/bin/pip install -r requirements-embeddings.txt
+./venv/bin/python -m src.qa.fetch_model    # vendors the model into models/, ~87MB, once
+./venv/bin/python -m pytest tests/ -q      # 76 passed
+```
+
+**Why `models/` is not in git.** 87MB of binary weights would sit in the history of every clone
+forever, and the download is one reproducible command against a pinned model name. What *is*
+committed is `eval/doc_vectors.npz` (44KB) — the document vectors — so the fixture travels with
+the repo even though the weights do not.
+
+`fetch_model` is what keeps inference off the network afterwards. Without a local copy the first
+question of the first run pays the download inside the answering path; with one, `load_model()`
+reads `models/all-MiniLM-L6-v2` and the model is loaded **once per process** — 0.44s at startup,
+then a flat 28ms per question with no reload. It skips files already present, so re-running it is
+free, and it retries a dropped connection rather than restarting the 87MB file.
 
 ```bash
 ./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --output answers.csv
@@ -168,7 +183,6 @@ flat 28ms per question with no reload. It skips files already present, so re-run
 ./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --mode tfidf   # no embeddings
 ./venv/bin/python -m src.qa.eval_answers   # the numbers below, plus ablations
 ./venv/bin/python -m src.qa.build_vectors  # refresh eval/doc_vectors.npz after editing kb/
-./venv/bin/python -m pytest tests/ -q      # 76 tests
 ```
 
 ```python

@@ -45,6 +45,22 @@ EMBEDDING_WEIGHT = 0.45
 MIN_SCORE = 0.08
 
 
+_warned_lexical = False
+
+
+def _warn_lexical_once():
+    """Logs the fallback notice once per process rather than once per Retriever.
+
+    The evaluation builds a Retriever per mode and per swept weight, which would otherwise bury
+    the report under twenty copies of the same line.
+    """
+    global _warned_lexical
+    if not _warned_lexical:
+        _warned_lexical = True
+        log.info("embeddings unavailable, ranking lexically only "
+                 "(pip install -r requirements-embeddings.txt to enable them)")
+
+
 @dataclass(frozen=True)
 class Hit:
     doc: Doc
@@ -106,7 +122,7 @@ class Retriever:
                     raise RuntimeError(
                         "embedding mode needs sentence-transformers installed to encode the "
                         "question; only document vectors are cached in eval/doc_vectors.npz")
-                log.info("embeddings unavailable, ranking lexically only")
+                _warn_lexical_once()
                 self.vectors = None
 
     def describe(self):

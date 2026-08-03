@@ -8,7 +8,7 @@ from datetime import date
 import numpy as np
 import pytest
 
-from src.qa.embeddings import DocumentVectors, doc_text, load_model
+from src.qa.embeddings import DocumentVectors, can_encode, doc_text, load_model
 from src.qa.fetch_model import fetch_file
 from src.qa.retriever import (
     MODE_EMBEDDING,
@@ -20,6 +20,12 @@ from src.qa.retriever import (
 
 AS_OF = date(2026, 7, 28)
 DISPUTE = "How many days does a customer have to raise a dispute?"
+
+# Tests that need the query encoded are skipped rather than failed on a clone that installed only
+# requirements.txt, so a reviewer without the optional extra still sees a green suite.
+needs_model = pytest.mark.skipif(
+    not can_encode(), reason="needs sentence-transformers: pip install -r requirements-embeddings.txt"
+)
 
 
 @pytest.fixture
@@ -74,7 +80,10 @@ class TestFallback:
         assert retriever.search(DISPUTE, date(2026, 7, 1))[0].doc_id == "kb-032"
 
 
+@needs_model
 class TestFusion:
+    """Fusion arithmetic, which only has two signals to combine when the model is present."""
+
     def test_weight_zero_and_one_isolate_the_two_signals(self, kb):
         """A hybrid at the extremes has to reproduce each pure mode's ranking."""
         lexical = Retriever(kb, mode=MODE_TFIDF).search(DISPUTE, AS_OF, k=3)
@@ -163,16 +172,20 @@ class TestDocumentVectors:
         matrix, _ = DocumentVectors(kb).matrix(list(kb.values()))
         assert np.allclose(np.linalg.norm(matrix, axis=1), 1.0, atol=1e-4)
 
-    def test_a_missing_fixture_is_not_fatal(self, kb, tmp_path):
-        """An absent fixture falls back to encoding, so a fresh clone still works."""
+    @needs_model
+    def test_a_missing_fixture_falls_back_to_encoding(self, kb, tmp_path):
+        """With the model installed, an absent fixture is re-encoded rather than being fatal."""
         vectors = DocumentVectors(kb, path=tmp_path / "absent.npz")
         assert not vectors.from_fixture
         assert vectors.available()
 
     def test_a_corrupt_fixture_is_ignored_rather_than_raising(self, kb, tmp_path):
+        """Construction must survive an unreadable fixture whether or not a model can replace it."""
         bad = tmp_path / "bad.npz"
         bad.write_bytes(b"not an npz file")
-        assert DocumentVectors(kb, path=bad).available()
+        vectors = DocumentVectors(kb, path=bad)
+        assert not vectors.from_fixture
+        assert vectors.available() == can_encode()
 
     def test_documents_without_vectors_are_dropped_not_zero_filled(self, kb):
         """A zero row would score zero against every query and rank as merely irrelevant."""
