@@ -1,0 +1,39 @@
+qid,answer,doc_ids
+q01,"Before an account can be closed, all balances must be withdrawn or converted, and any open orders cancelled. Request closure from the account settings page.",kb-108
+q02,"SMS based recovery has been discontinued and is no longer offered for any account. Withdrawals remain disabled for 72 hours after a successful restore, as a precaution against account takeover.",kb-022
+q03,"Disputes must be raised within 30 days of the trade date. Open the trade in your activity list and choose Raise a dispute, select a reason, and attach supporting evidence.",kb-032
+q04,"Earn rates are currently 3.1% APY for ETH, 4.4% APY for SOL and 2.2% APY for ADA. Rates are variable, are reviewed quarterly, and the rate displayed when you stake is not fixed for the life of the position.",kb-042
+q05,"Transfer ceilings are set by verification tier. Tier 1 is capped at $5,000 per day, Tier 2 at $50,000 per day and Tier 3 at $250,000 per day.",kb-052
+q06,"Unauthorized activity must be reported from the in-app Report activity flow, which is monitored continuously. Filing a report places an automatic 24 hour freeze on outbound transfers while the case is triaged.",kb-062
+q07,"Funding a purchase with a linked card is charged at 2.49% of the purchase value, applied on top of the quoted spread. Card funded orders are credited instantly.",kb-072
+q08,"Bank transfers under $10,000 now clear the same day when they are received before 16:00 UTC on a business day. Transfers at or above $10,000, and any transfer received after the cut off, clear within 1 business day.",kb-082
+q09,"Transfers out of your account are charged at 0.4% of the transfer amount, plus the network cost quoted at the time you confirm. There is no minimum charge.",kb-013
+q10,"Transfer ceilings are set by verification tier. Tier 1 is capped at $5,000 per day, Tier 2 at $50,000 per day and Tier 3 at $250,000 per day.",kb-052
+q11,"The withdrawal fee for crypto withdrawals is 0.9% of the amount withdrawn, with a minimum charge of $1.00. The withdrawal fee is calculated on the gross amount requested and deducted before the transfer is broadcast.",kb-012
+q12,"Not answerable from the knowledge base. No document in force on 2026-03-01 covers this, so this needs a human agent.",
+q13,"Current staking reward rates are 4.2% APY for ETH, 5.6% APY for SOL and 3.0% APY for ADA. The rate shown on the staking screen at the moment you stake is not locked in for the duration of the stake.",kb-041
+q14,"If you have lost your phone or lost access to your authenticator app, you can recover two-factor authentication using an SMS backup code sent to the phone number registered on your account. Request the backup code from the login screen, enter it, and then re-enrol a new authenticator device.",kb-021
+q15,"No, not as at 2026-07-28. The relevant notice (Scheduled Maintenance Notice) applied until 2026-06-14 and is no longer in force. For the record, it said: Withdrawals and outbound transfers are paused for scheduled maintenance from 2026-06-12 22:00 UTC until 2026-06-14 06:00 UTC.",kb-091
+q16,"No, not as at 2026-07-28. The relevant notice (Referral Bonus Program) applied until 2026-03-31 and is no longer in force. For the record, it said: Invite a friend and you both receive a $25 bonus once they complete identity verification and their first trade of at least $100.",kb-092
+q17,"No, not as at 2026-07-28. The relevant notice (Scheduled Maintenance Notice) applied until 2026-06-14 and is no longer in force. For the record, it said: Withdrawals and outbound transfers are paused for scheduled maintenance from 2026-06-12 22:00 UTC until 2026-06-14 06:00 UTC.",kb-091
+q18,"No, not as at 2026-07-28. The relevant notice (Referral Bonus Program) applied until 2026-03-31 and is no longer in force. For the record, it said: Invite a friend and you both receive a $25 bonus once they complete identity verification and their first trade of at least $100.",kb-092
+q19,"Funding a purchase with a linked card is charged at 2.49% of the purchase value, applied on top of the quoted spread. Card funded orders are credited instantly.",kb-072
+q20,"Version 1 of the public API is deprecated and will stop responding on 2027-01-15. All endpoints have a v2 equivalent documented in the developer portal. v1 keys continue to work until the shutdown date, but no new v1 keys are being issued.",kb-094
+q21,Annual tax documents for the previous calendar year are published by February 15 and can be downloaded from the Reports section of your account. We do not provide tax advice and the documents are informational only.,kb-101
+q22,"Not answerable from the knowledge base. No document in force on 2026-07-28 covers this, so this needs a human agent.",
+q23,"A market order executes immediately at the best price currently available, so the amount you receive can differ from the amount quoted when you tapped buy. A limit order executes only at your specified price or better, and rests unfilled until the market reaches it or you cancel it.",kb-103
+q24,"To send crypto to an external wallet, add the destination address to your address whitelist first. Always confirm the network as well as the address, since sending on the wrong network usually makes funds unrecoverable.",kb-104
+q25,Price alerts are configured per asset from the asset detail screen. You may set up to 20 active alerts per account.,kb-105
+q26,"Recurring buys can be scheduled daily, weekly, every two weeks or monthly. You may pause or cancel a recurring buy at any time from the Recurring section, and a cancellation takes effect immediately for any execution that has not already started.",kb-106
+q27,"Unauthenticated requests to public endpoints are limited to 100 requests per minute per IP address. Authenticated requests are limited to 1,000 requests per minute per API key.",kb-107
+q28,"Before an account can be closed, all balances must be withdrawn or converted, and any open orders cancelled. Certain records are retained after closure where we are legally required to keep them, and a closed account cannot be reopened, so a new application is required if you return later.",kb-108
+q29,"The service is available in the United Kingdom, the European Economic Area, Brazil, India, Canada and Australia. Product availability differs by region, and staking, card funding and recurring buys are not offered everywhere.",kb-109
+q30,"We never ask for your password, recovery phrase or a one time code, and we never ask you to move funds to a holding wallet for safekeeping. Links in email should be checked against the official domain before being opened, and support will never initiate contact asking you to install remote access software.",kb-110
+q31,"Not answerable from the knowledge base. No document in force on 2026-07-28 covers this, so this needs a human agent.",
+q32,"Not answerable from the knowledge base. No document in force on 2026-07-28 covers this, so this needs a human agent.",
+q33,"Not answerable from the knowledge base. No document in force on 2026-07-28 covers this, so this needs a human agent.",
+q34,"Not answerable from the knowledge base. No document in force on 2026-07-28 covers this, so this needs a human agent.",
+q35,"Not answerable from the knowledge base. No document in force on 2026-07-28 covers this, so this needs a human agent.",
+q36,"Not answerable from the knowledge base. No document in force on 2026-07-28 covers this, so this needs a human agent.",
+q37,"Not answerable from the knowledge base. No document in force on 2026-07-28 covers this, so this needs a human agent.",
+q38,"Disputes must be raised within 30 days of the trade date. Open the trade in your activity list and choose Raise a dispute, select a reason, and attach supporting evidence.",kb-032

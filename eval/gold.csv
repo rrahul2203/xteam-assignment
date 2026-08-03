@@ -1,0 +1,39 @@
+qid,stratum,doc_ids,must_match,note
+q01,current,kb-013,0\.4%,withdrawal fee today is the v3 transfer charge
+q02,current,kb-022,identity verification|photo ID|video selfie,SMS recovery discontinued
+q03,current,kb-032,30 days,dispute window shortened
+q04,current,kb-042,3\.1%,ETH earn rate v2
+q05,current,kb-052,"\$50,000",tier 2 ceiling v2
+q06,current,kb-062,1 business day,report flow plus response time
+q07,current,kb-072,2\.49%,card funding charge v2
+q08,current,kb-082,same day|1 business day,bank transfer clearing v2
+q09,current,kb-013,no minimum,v3 removed the minimum charge
+q10,current,kb-052,"\$5,000",tier 1 ceiling v2
+q11,historical,kb-012,0\.9%,as_of falls in v2 window
+q12,historical,kb-031,60 days,as_of predates the shortened window
+q13,historical,kb-041,4\.2%,as_of falls in v1 rate window
+q14,historical,kb-021,SMS,as_of predates the SMS discontinuation
+q15,lapsed,kb-091,,maintenance window closed before as_of
+q16,lapsed,kb-092,,referral program ended before as_of
+q17,lapsed,kb-091,,same closed window as q15
+q18,lapsed,kb-092,,same ended program as q16
+q19,current,kb-093,30 minutes,card purchases degraded notice
+q20,current,kb-094,2027-01-15,API v1 shutdown date
+q21,current,kb-101,February 15,tax documents publication
+q22,current,kb-102,DOGE,Dogecoin is on the supported list
+q23,current,kb-103,market order|limit order,order types
+q24,current,kb-104,24 hour,whitelist hold
+q25,current,kb-105,20,active price alert cap
+q26,current,kb-106,skipped|insufficient funds,recurring buy failure
+q27,current,kb-107,"1,000",authenticated rate limit
+q28,current,kb-108,cannot be reopened,account closure is final
+q29,current,kb-109,Brazil,regional availability
+q30,current,kb-110,never ask,phishing guidance
+q31,unanswerable,,,margin and leverage are absent from the KB
+q32,unanswerable,,,no phone number anywhere in the KB
+q33,unanswerable,,,bill payment is not a documented product
+q34,unanswerable,,,no deceased-holder transfer policy
+q35,unanswerable,,,joint accounts are not documented
+q36,unanswerable,,,no crypto-backed loan product
+q37,unanswerable,,,custodian and audit are not documented
+q38,unanswerable,,,inbound chargebacks are not documented
