@@ -518,11 +518,31 @@ which is text. So this reuses the Part A classifier unchanged — a screenshot a
 routed by the same model on the same four labels, and Part C adds an extraction stage rather than a
 second classifier with its own drift and its own retraining story.
 
+Both choices come down to the same thing. A screenshot's glyphs were drawn by software at a known
+size. There's no camera angle to undo, no lighting, no microphone in the way. Big models are big
+partly so they can cope with all of that, and none of it is here, so the capacity sits idle. That's
+what the 9/12 against 7/12 below is really showing.
+
+I split the work into extract-then-classify, and that only works if the text says everything about
+the image that the route depends on. Here it does — the layout and the colours don't change which
+queue a ticket belongs in, the words do. That's true of these assets, not of screenshots generally.
+If a route ever hinged on something you can only see, like a chart going the wrong way or a button
+rendered broken, the split would throw away the evidence and one end-to-end model would be the
+better bet.
+
+While it does hold, I get three things I'd otherwise give up. When a route is wrong I can tell
+whether OCR misread it or the classifier misjudged it. The classifier half already has an accuracy
+measured on 400 labelled tickets from Part A, so the only new thing that can break is extraction and
+I needed **no new labels** to check it. And there's readable text in the middle — I can redact it, log
+it, and show it to whoever reviews the decision. The 500M model gives you a label and nothing else;
+*"Sign in page."* is what its version of that middle step looks like.
+
 ## OCR against a vision model, measured
 
-`screenshot_compare.py` puts both approaches through the same 12 scans — 3 assets × 4 blur radii — routing with OCR plus the Part A classifier, then
-with [SmolVLM-500M-Instruct](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct) (507M
-parameters, local, on MPS) shown the image and asked for the route directly:
+`screenshot_compare.py` puts both approaches through the same 12 scans — 3 assets × 4 blur radii —
+routing with OCR plus the Part A classifier, then with
+[SmolVLM-500M-Instruct](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct) (507M parameters,
+local, on MPS) shown the image and asked for the route directly:
 
 ```bash
 ./venv/bin/python -m src.router.screenshot_compare --vlm /path/to/SmolVLM-500M-Instruct
@@ -624,6 +644,20 @@ would parallelise onto separate cores; I did not, because ~1 s already sits well
 for asynchronous triage — screenshots arrive attached to a ticket a human reads minutes later, and
 the route needs to be right more than fast.
 
+One caveat on that, because "zero marginal cost" is easy to oversell. Running locally means paying up
+front for hardware and nothing per ticket after that, so the cost per ticket keeps dropping as volume
+grows until you run out of cores. A hosted API is the opposite: nothing up front, then a fee on every
+image forever. So there's a volume where the two meet, and **below it the API really is cheaper**. Any
+per-ticket number is meaningless unless you say which side of that line you're on.
+
+For a support queue I think the line sits well below where this would run. Screenshot volume tracks
+ticket volume, which tracks customers, so it grows fairly smoothly rather than spiking — which is
+exactly when buying capacity beats renting it. The ~1s doesn't cost anything either, since a human
+opens the ticket minutes later; what matters is tickets per hour, and that just means more cores. And
+the hosted bill isn't the whole hosted cost — sending screenshots out has the problem described
+[below](#where-these-get-processed-and-why-that-is-the-whole-design), which never gets cheaper at any
+volume and never shows up on an invoice.
+
 ## When it degrades
 
 Blurring each asset progressively and re-routing — `screenshot_eval` — turns this from a promise
@@ -655,6 +689,28 @@ Two other failures are handled separately. **No text at all** returns `review` w
 never reaches the classifier, because an unreadable image is a failed read, not a `general` ticket.
 **A dropped word** has no gate at all — a missing word lowers no confidence score — and the union of
 two passes is the mitigation precisely because a word one pass loses the other may keep.
+
+I don't think the drift toward `general` is luck, and it's worth saying why. Blurring throws away fine
+detail first and rough shapes last, and fine detail is what tells letters apart. The words that pin a
+ticket to a *specific* route are the long uncommon ones — "unauthorised", "chargeback" — and every
+character in them has to survive for OCR to get them back. The words that keep a ticket in `general`
+are short and ordinary and come through a bad read fine. So the specific evidence dies before the
+generic evidence does, and the route slides toward `general` on the way down. The useful part is that
+it can't slide the other way: blur can't invent "unauthorised", so it can lose me a fraud report but
+it can't fabricate one. That's a property of blur specifically. A crop could do the opposite — cut off
+the surrounding text and leave one rare word standing — and I haven't tested crops.
+
+The gate is also narrower than it looks. OCR confidence tells me how good the *input* was; it says
+nothing about whether the route is right. Those aren't the same question, and the overlapping ranges
+above are what happens when you treat them as one. Route confidence can't stand in for it either,
+because the four probabilities are forced to add to one — the model will always tell you which class
+won, even when the text it read was noise. So I need both numbers: one for whether the scan was
+readable, one for how clear-cut the decision was. A scan can be perfectly legible and genuinely
+ambiguous, or unreadable and confidently misrouted.
+
+That's also why a reader with no confidence score gets held every time. No score isn't a good score.
+If I let it default to a pass, "I never checked" would quietly become "I checked and it's fine", which
+is the sort of thing that makes unattended automation go wrong.
 
 ## Where these get processed, and why that is the whole design
 
@@ -691,3 +747,28 @@ middle of an all-digit address and leaves the `bc1q` prefix behind as literal te
 text-only — **the source PNG still contains everything**. The routed text is clean; the attachment it
 came from is not, so retention and access control on the stored image is the unsolved half and a real
 deployment needs an image-retention policy to match.
+
+The thing that makes attachments different from every other input here is that **I didn't ask for what's
+in them**. A ticket body is a field I defined. A question comes with a date. A screenshot comes with
+whatever was on the customer's screen when they hit capture, and I have no say in it. So I can't design
+against what these three files contain, only against what an attachment could plausibly contain, which
+is roughly anything.
+
+That's why redaction happens before the text is classified rather than after. Every place a raw OTP
+travels through is another place it has to be cleaned out of later — a log line, a queue, the CSV, last
+month's backup — so the cheapest moment to drop it is the first one. And it genuinely is cheap:
+confidence moves by less than 0.01, because the route was never riding on the digits. Keeping `[otp]`
+instead of deleting the line outright is the other half of that. The fact that a code was handed over
+is the fraud signal; the code itself is just something I'd rather not be storing.
+
+Staying local isn't a smaller version of the same risk, it's a different situation. Call a hosted API
+and that vendor's retention window, sub-processors, regional copies and breach history are all part of
+your exposure, and you can't see any of it from your own logs. Not sending the image means there's
+nothing to manage. What makes me comfortable recommending it is that the cheap option and the safe
+option are the same one here, so I don't need the cost argument to be right.
+
+Where I'd stop trusting this: the redaction patterns only catch identifier shapes someone thought to
+write down. A national ID format I've never seen goes straight through, and the output looks exactly as
+clean as it did before — which is the worst way for a safety control to fail. So the extracted text
+should be treated as sensitive whether or not it's been redacted. Redaction reduces what's in there; it
+doesn't make it safe to hand around.
