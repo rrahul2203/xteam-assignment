@@ -24,13 +24,14 @@ from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.utils.class_weight import compute_class_weight
 
-from data import FRAUD
+from .crossval import N_SPLITS, over_seeds
+from .data import FRAUD
 
 log = logging.getLogger(__name__)
 
-# Set from `python3 src/tune.py`, which grid-searches these under the same grouped CV used
+# Set from `python3 -m src.router.tune`, which grid-searches these under the grouped CV used
 # to report scores. C is held one step below the search's winner on purpose: the top-ranked
-# C buys its macro-F1 by shedding fraud recall, and recall is the guardrail.
+# value buys its macro-F1 by shedding fraud recall, and recall is the guardrail.
 WORD_NGRAMS = (1, 2)
 CHAR_NGRAMS = (2, 4)
 C = 10.0
@@ -46,16 +47,18 @@ SEARCH_SPACE = {
 MIN_FRAUD_PRECISION = 0.60
 SKEW_CANDIDATES = (1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
 
-# Cached output of solve_skew() so build_pipeline() stays cheap. Re-run `python3 src/tune.py`
-# to refresh it after the data or the feature settings change.
+# Cached output of solve_skew() so build_pipeline() stays cheap. Re-run
+# `python3 -m src.router.tune` to refresh it after the data or feature settings change.
 FRAUD_SKEW = 2.5
 
-CV_SPLITS = 5
 TUNE_SEEDS = (0, 1, 2, 3, 4)
 
 
 def fraud_first_weights(labels, skew=None, target=FRAUD):
-    """Inverse-frequency weights from the observed labels, then push `target` above parity."""
+    """Inverse-frequency weights from the observed labels, then push `target` above parity.
+
+    `skew=None` uses the cached FRAUD_SKEW; solve_skew passes explicit candidates instead.
+    """
     classes = sorted(Counter(labels))
     weights = dict(zip(
         classes,
@@ -64,6 +67,19 @@ def fraud_first_weights(labels, skew=None, target=FRAUD):
     if target in weights:
         weights[target] *= FRAUD_SKEW if skew is None else skew
     return {c: float(w) for c, w in weights.items()}
+
+
+def pipeline_factory(skew=None, params=None):
+    """A `build(labels) -> unfitted pipeline` callable for crossval.
+
+    Weights come from the fold's own labels, so not even the class distribution leaks.
+    """
+    def build(fold_labels):
+        pipe = build_pipeline(labels=fold_labels, skew=skew)
+        if params:
+            pipe.set_params(**params)
+        return pipe
+    return build
 
 
 def build_pipeline(class_weight=None, labels=None, skew=None):
@@ -90,18 +106,6 @@ def train(texts, labels, class_weight=None, skew=None):
     return build_pipeline(class_weight, labels=labels, skew=skew).fit(texts, labels)
 
 
-def _grouped_predict(X, y, g, seed, skew=None, params=None):
-    """One grouped-CV pass, weights and vectorisers fitted per fold."""
-    preds = np.empty(len(y), dtype=object)
-    cv = StratifiedGroupKFold(n_splits=CV_SPLITS, shuffle=True, random_state=seed)
-    for train_i, test_i in cv.split(X, y, groups=g):
-        pipe = build_pipeline(labels=y[train_i], skew=skew)
-        if params:
-            pipe.set_params(**params)
-        preds[test_i] = pipe.fit(X[train_i], y[train_i]).predict(X[test_i])
-    return preds
-
-
 def solve_skew(texts, labels, groups_, floor=MIN_FRAUD_PRECISION,
                candidates=SKEW_CANDIDATES, seeds=TUNE_SEEDS, target=FRAUD):
     """Largest skew whose fraud precision still clears `floor`, measured under grouped CV.
@@ -109,17 +113,15 @@ def solve_skew(texts, labels, groups_, floor=MIN_FRAUD_PRECISION,
     Skew trades fraud precision for fraud recall, so the floor is the binding constraint.
     Falls back to the smallest candidate if none clears it.
     """
-    X, y, g = np.asarray(texts), np.asarray(labels), np.asarray(groups_)
     measured = []
 
     for skew in candidates:
-        precisions = [
-            precision_score(
-                y, _grouped_predict(X, y, g, seed, skew=skew),
-                labels=[target], average="macro", zero_division=0,
-            )
-            for seed in seeds
-        ]
+        precisions = over_seeds(
+            texts, labels, pipeline_factory(skew=skew),
+            lambda y, preds: precision_score(
+                y, preds, labels=[target], average="macro", zero_division=0),
+            seeds=seeds, groups_=groups_,
+        )
         precision = float(np.mean(precisions))
         measured.append((skew, precision))
         log.info("skew %.2f -> fraud precision %.4f", skew, precision)
@@ -139,13 +141,16 @@ def tune(texts, labels, groups_, seeds=TUNE_SEEDS, space=None):
 
     Averaged over several seeds, because at this group count a single split picks its
     winner by noise. Returns (best_params, ranked) with ranked as (mean, std, params).
+
+    GridSearchCV needs a splitter, not out-of-fold predictions, so it can't use crossval.
+    Weights here come from all labels, which is why reported scores come from `evaluate`.
     """
     space = space or SEARCH_SPACE
     X, y, g = np.asarray(texts), np.asarray(labels), np.asarray(groups_)
     scores = {}
 
     for seed in seeds:
-        cv = StratifiedGroupKFold(n_splits=CV_SPLITS, shuffle=True, random_state=seed)
+        cv = StratifiedGroupKFold(n_splits=N_SPLITS, shuffle=True, random_state=seed)
         search = GridSearchCV(
             build_pipeline(labels=y), space, scoring="f1_macro", cv=cv,
             n_jobs=-1, refit=False,

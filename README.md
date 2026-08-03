@@ -2,6 +2,31 @@
 
 Numbers below come from `notebook/baseline_classifier_training.ipynb`.
 
+## Running it
+
+```bash
+python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+
+# Route classification, per the starter pack's output contract.
+./venv/bin/python -m src.router.predict --input messages.csv --output predictions.csv
+./venv/bin/python -m src.router.predict --text "I see a transfer I never made"   # one message
+
+./venv/bin/python -m src.router.evaluate   # the honest scores below
+./venv/bin/python -m src.router.tune       # re-derive the tuned settings
+```
+
+`predictions.csv` has `text` and `prediction`; `--confidence` adds the top-class probability,
+which is what a review queue would threshold on.
+
+## Layout
+
+```
+src/router/    data · crossval · model · evaluate · predict · tune
+```
+
+`crossval` holds the grouped-CV protocol that `evaluate`, `model` and `tune` all score
+through, so the search and the reported number cannot drift apart.
+
 ## Verdict
 
 No sign-off yet. The model looks fine; the evaluation can't back the claim.
@@ -66,7 +91,7 @@ Secondary: macro-F1, per-class recall, abstention rate, p95 latency.
 
 ## What the fix changes
 
-Working version in `src/`, walked through in `notebook/baseline_fix_walkthrough.ipynb`.
+Working version in `src/router/`, walked through in `notebook/baseline_fix_walkthrough.ipynb`.
 Each number below is measured under template-grouped CV.
 
 1. **Vectorisers moved inside a `Pipeline`.** The baseline calls `fit_transform` on all

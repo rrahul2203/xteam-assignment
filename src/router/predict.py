@@ -1,7 +1,7 @@
 """Route classification CLI.
 
-    python3 src/predict.py --input messages.csv --output predictions.csv
-    python3 src/predict.py --text "I can't log in"
+    python3 -m src.router.predict --input messages.csv --output predictions.csv
+    python3 -m src.router.predict --text "I can't log in"
 
 Writes `text` and `prediction`, per the brief. `--confidence` adds the top-class
 probability, which is what a review queue would threshold on.
@@ -10,8 +10,8 @@ import argparse
 import csv
 import logging
 
-from data import default_data_path, load, load_texts
-from model import train
+from .data import default_data_path, load, load_texts
+from .model import train
 
 log = logging.getLogger(__name__)
 

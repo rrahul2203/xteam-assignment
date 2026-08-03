@@ -1,9 +1,9 @@
 """Loading training data and deriving template groups for honest validation.
 
-train.csv is synthetic: 400 rows come from a small set of base templates with slots
-filled in (coin, device, amount) and a greeting or sign-off attached. Grouping by
-template and splitting on the group forces every validation message to come from a
-template the model never saw.
+train.csv is synthetic: rows come from a small set of base templates with slots filled in
+(coin, device, amount) and a greeting or sign-off attached. Grouping by template and
+splitting on the group forces every validation message to come from a template the model
+never saw.
 """
 import csv
 import re
@@ -104,4 +104,5 @@ def load_texts(path, text_column=None):
 
 
 def default_data_path():
-    return Path(__file__).resolve().parents[1] / "starter" / "data" / "train.csv"
+    """starter/data/train.csv, resolved from this file: src/router/data.py -> repo root."""
+    return Path(__file__).resolve().parents[2] / "starter" / "data" / "train.csv"

@@ -1,26 +1,18 @@
 """Search the hyperparameters under grouped CV and log the ranking.
 
-    python3 src/tune.py
+    python3 -m src.router.tune
 
-The winner is what WORD_NGRAMS / CHAR_NGRAMS / C in model.py are set to, and the solved
-skew is what FRAUD_SKEW is set to. Re-run after the training data changes. Fraud recall is
-logged alongside macro-F1 because a config that wins on macro-F1 while shedding fraud
-recall is not an improvement here.
+Sets WORD_NGRAMS / CHAR_NGRAMS / C and FRAUD_SKEW in model.py; re-run when the data changes.
+Fraud recall is logged beside macro-F1, since a config can win on macro-F1 by shedding it.
 """
 import logging
 
 import numpy as np
 from sklearn.metrics import precision_score, recall_score
-from sklearn.model_selection import StratifiedGroupKFold
 
-from data import FRAUD, default_data_path, groups, load
-from model import (
-    MIN_FRAUD_PRECISION,
-    build_pipeline,
-    fraud_first_weights,
-    solve_skew,
-    tune,
-)
+from .crossval import over_seeds
+from .data import FRAUD, default_data_path, groups, load
+from .model import MIN_FRAUD_PRECISION, pipeline_factory, solve_skew, tune
 
 log = logging.getLogger(__name__)
 
@@ -29,20 +21,15 @@ SEEDS = (0, 1, 2, 3, 4)
 
 def fraud_metrics(texts, labels, groups_, params, seeds=SEEDS):
     """Fraud recall and precision for one config, same protocol as the ranking."""
-    X, y, g = np.asarray(texts), np.asarray(labels), np.asarray(groups_)
-    recalls, precisions = [], []
-
-    for seed in seeds:
-        cv = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=seed)
-        preds = np.empty(len(y), dtype=object)
-        for train_i, test_i in cv.split(X, y, groups=g):
-            pipe = build_pipeline(fraud_first_weights(y[train_i]))
-            pipe.set_params(**params)
-            preds[test_i] = pipe.fit(X[train_i], y[train_i]).predict(X[test_i])
-        recalls.append(recall_score(y, preds, labels=[FRAUD], average="macro"))
-        precisions.append(
-            precision_score(y, preds, labels=[FRAUD], average="macro", zero_division=0)
-        )
+    per_seed = over_seeds(
+        texts, labels, pipeline_factory(params=params),
+        lambda y, preds: (
+            recall_score(y, preds, labels=[FRAUD], average="macro", zero_division=0),
+            precision_score(y, preds, labels=[FRAUD], average="macro", zero_division=0),
+        ),
+        seeds=seeds, groups_=groups_,
+    )
+    recalls, precisions = zip(*per_seed)
     return float(np.mean(recalls)), float(np.mean(precisions))
 
 
