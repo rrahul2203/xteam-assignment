@@ -6,9 +6,9 @@ date-aware question answering service.
 
 ```
 src/router/    Part A — data · crossval · model · evaluate · predict · tune
-src/qa/        Part B — kb · retriever · answerer · eval_answers · answer_cli
-tests/         Part B — test_kb · test_answerer
-eval/gold.csv  Part B — hand-labelled retrieval labels
+src/qa/        Part B — kb · retriever · embeddings · answerer · eval_answers · answer_cli
+tests/         Part B — test_kb · test_retriever · test_answerer
+eval/          Part B — gold.csv labels · doc_vectors.npz cached embeddings
 ```
 
 # Part A — Support Ticket Router baseline review
@@ -133,27 +133,63 @@ Baseline's probably close to good enough. The evaluation isn't.
 
 # Part B — Answering from the knowledge base
 
-No LLM, no API key, no network. TF-IDF retrieval over 31 documents, and answers are sentences
-copied verbatim from the document cited. That is the grounding argument: the answer text is a
-substring of the source, so it cannot drift from it, and `doc_ids` is checkable by opening the
-file. `test_answer_text_is_copied_from_the_cited_document` asserts exactly this.
+**No LLM and no API key.** Retrieval over 31 documents fusing two signals — TF-IDF and sentence
+embeddings — and answers are sentences copied verbatim from the document cited. That is the
+grounding argument: the answer text is a substring of the source, so it cannot drift from it, and
+`doc_ids` is checkable by opening the file. `test_answer_text_is_copied_from_the_cited_document`
+asserts exactly this.
+
+Embeddings are the brief's "embeddings and no LLM" option, and they are optional rather than
+assumed. `sentence-transformers` is not in `requirements.txt`; without it the service ranks
+lexically and says so, and the whole suite still passes. Two tests simulate its absence.
 
 ## Running it
+
+```bash
+# Required. Runs everything, lexical ranking only.
+./venv/bin/pip install -r requirements.txt
+
+# Optional. Adds the semantic half of retrieval, which is what the numbers below were measured
+# with. Downloads ~90MB of model weights on first use.
+./venv/bin/pip install -r requirements-embeddings.txt
+```
 
 ```bash
 ./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --output answers.csv
 ./venv/bin/python -m src.qa.answer_cli --question "How long do I have to raise a dispute?" \
                                        --as-of 2026-03-01
+./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --mode tfidf   # no embeddings
 ./venv/bin/python -m src.qa.eval_answers   # the numbers below, plus ablations
-./venv/bin/python -m pytest tests/ -q      # 52 tests
+./venv/bin/python -m src.qa.build_vectors  # refresh eval/doc_vectors.npz after editing kb/
+./venv/bin/python -m pytest tests/ -q      # 73 tests
 ```
 
 ```python
 from src.qa.answerer import AnswerService
-service = AnswerService()                       # loads the KB once
+service = AnswerService()                       # loads the KB and vectors once
 result = service.answer("How long do I have to raise a dispute?", "2026-03-01")
 result.text, result.doc_ids, result.status      # -> "...within 60 days...", ["kb-031"], "answered"
 ```
+
+## Retrieval: two signals, because they fail differently
+
+TF-IDF matches shared words. It is precise on doc ids, figures and exact terms, and blind when a
+question and a document name the same thing differently. Embeddings
+(`all-MiniLM-L6-v2`, 384-dim) match meaning, bridging that gap while being vaguer about which of
+several similar documents is meant.
+
+Both are cosines, so they fuse as a weighted sum of raw values — deliberately not min-max
+normalised per query, which would map the best candidate to 1.0 on every question and silently
+disable the absolute abstention threshold.
+
+Document vectors do not depend on `as_of`, so they are encoded once, cached in
+`eval/doc_vectors.npz` (44KB, committed), and date filtering is a row selection over them. Only
+the query is encoded per call — which is why the cached fixture alone is not enough to call the
+system semantic, and `Retriever.describe()` reports `tfidf` when the model is absent even though
+document vectors are present.
+
+Filter first, rank second still holds, and the date layer (`kb.py`) was not touched to add any of
+this.
 
 ## Correct as at a date
 
@@ -218,60 +254,97 @@ fails.
 
 | Metric | Score |
 |---|---|
-| Document accuracy (answerable, right doc cited) | **0.867** (26/30) |
-| Wrong-answer rate (answered confidently, wrong doc) | **0.053** |
+| Document accuracy (answerable, right doc cited) | **0.933** (28/30) |
+| Wrong-answer rate (answered confidently, wrong doc) | **0.000** |
 | Answer recall (answerable questions answered) | 0.933 |
 | Abstention recall (unanswerable declined) | 0.875 |
-| Fact accuracy (quoted text contains the expected value) | 0.692 |
+| Fact accuracy (quoted text contains the expected value) | 0.731 |
 
 Per stratum, with Wilson intervals — the normal approximation is useless at n=4:
 
 | Stratum | Score | 95% CI |
 |---|---|---|
-| current | 19/22 = 0.864 | [0.67, 0.95] |
+| current | 21/22 = 0.955 | [0.78, 0.99] |
 | historical | 3/4 = 0.750 | [0.30, 0.95] |
 | lapsed | 4/4 = 1.000 | [0.51, 1.00] |
 | unanswerable | 7/8 = 0.875 | [0.53, 0.98] |
 
 One aggregate number would hide all four, and the strata fail for different reasons.
 
+**Lexical against semantic against fused.** Choosing embeddings should be a measurement, not a
+preference, so all three are scored on the same gold set:
+
+| Ranking | Doc accuracy | Wrong-answer | Abstention recall |
+|---|---|---|---|
+| TF-IDF only | 0.867 | 0.053 | 0.875 |
+| Embeddings only | 0.900 | 0.026 | **1.000** |
+| **Hybrid, w=0.45** | **0.933** | **0.000** | 0.875 |
+
+The fusion earns its place for a specific reason: **each signal fixes what the other breaks.**
+Embeddings rescue q01 and q19, both vocabulary gaps TF-IDF cannot close. TF-IDF rescues q24,
+which embeddings get wrong. Only the hybrid gets all three, and it is the only configuration with
+no confidently-wrong answers at all.
+
+The sweep is flat at 0.933/0.000 across **0.38–0.52** and degrades either side, so 0.45 is the
+centre of a plateau rather than a fitted point — the choice does not sit on a cliff.
+`eval_answers.py` prints the sweep, on a grid deliberately tighter near the shipped weight, since
+a coarse step hides where the flat region ends.
+
+**Where embeddings lose:** abstention recall, 0.875 against a clean 1.000 for embeddings alone.
+Semantic similarity gives q38 enough of a plausible neighbour to answer it. I kept the hybrid
+because a wrong-answer rate of 0.000 matters more than one extra abstention, but the trade is
+real and it is the reverse of what I expected.
+
 **Ablations, because they are what make the headline mean anything.** If switching the date
 filter off does not move the score, the score is not measuring the thing this exercise is about:
 
 | Configuration | Doc accuracy | Wrong-answer |
 |---|---|---|
-| Shipped | 0.867 | 0.053 |
+| Shipped | 0.933 | 0.000 |
 | No date filter (rank whole KB) | 0.533 | 0.316 |
-| No abstention (always answer top hit) | 0.867 | 0.105 |
-| Coverage only, no absent-term conjunction | 0.767 | 0.026 |
+| No abstention (always answer top hit) | 0.967 | 0.026 |
+| Coverage only, no absent-term conjunction | 0.767 | 0.000 |
 
-Dropping the date filter costs a third of document accuracy and sextuples the wrong-answer
-rate. The coverage-only row is the honest trade: it declines more, so it is wrong less often,
-and it gets fewer answerable questions right.
+Dropping the date filter costs 40% of document accuracy and takes the wrong-answer rate from
+zero to 0.316. That is the number that says the system is doing date resolution rather than
+keyword matching.
+
+The second row is a cost, stated plainly: **abstaining loses document accuracy.** Answering
+everything scores 0.967 against the shipped 0.933, because q12 and q22 are declined despite the
+right document ranking first. Abstention buys a 0.000 wrong-answer rate and all 7 correct
+declines at the price of those two, which is the trade I would defend for policy answers a
+customer acts on — but it is a trade, not a free win. The coverage-only row is the other side:
+drop half the conjunction and document accuracy falls to 0.767.
 
 `eval_answers.py` also prints a coverage threshold sweep, so 0.35 is visible as a point on a
 curve rather than asserted.
 
-## The four failures
+## The three failures
 
 Named rather than tuned away — a stopping rule matters more here than 30/30 on n=38.
 
-- **q01** — "how do I withdraw my balance" cites the account-closure doc, not kb-013. The doc
-  says "transfers out"; the question says "withdraw". A vocabulary gap, and the honest fix is
-  synonyms or embeddings, not another threshold.
-- **q12** — abstains on a March 2026 dispute question at coverage 0.32 against the 0.35 bar.
-  The date logic is right; the confidence gate is one notch too tight.
-- **q19** — cites kb-072 over kb-093, two documents that genuinely overlap in wording.
-- **q38** — answers an unanswerable question whose vocabulary happens to be all KB words.
+- **q12** — abstains on a March 2026 dispute question, just under the coverage bar. The date
+  logic resolves correctly; the confidence gate is one notch too tight.
+- **q22** — abstains on a Dogecoin deposit question that kb-102 does answer.
+- **q38** — answers an unanswerable question whose vocabulary is entirely KB words. Embeddings
+  made this one worse, not better.
 
-Two things were tested and **rejected**: a word/char feature weight sweep (flat across every
-weighting) and sentence-level scoring instead of document-level (worse, 25/30 against 26/30).
-Recorded rather than shipped.
+Adding embeddings fixed q01 and q19 (both vocabulary gaps) and introduced none. Three things
+were tested and **rejected**: min-max score normalisation before fusion (breaks the absolute
+abstention threshold), a word/char feature weight sweep (flat across every weighting), and
+sentence-level scoring instead of document-level (worse). Recorded rather than shipped.
 
 ## Limitations
 
 The same person wrote the system and the labels, and n=38 — every interval above is wide enough
 to say so. This measures whether the date logic works, which it does. It cannot support a claim
-about generalisation to unseen questions. TF-IDF also matches only on shared words, so q01 is
-the whole class of failure it will keep having; sentence embeddings are the next step, and they
-would slot behind the same `Retriever` interface without touching the date layer.
+about generalisation to unseen questions.
+
+`all-MiniLM-L6-v2` is general-purpose and knows nothing about this product's vocabulary, so it
+bridges ordinary synonyms ("withdraw"/"transfers out") and would not bridge domain jargon a
+support team invented. The gold set is also too small to tune the fusion weight on honestly —
+0.45 sits mid-plateau, which is the most that can be claimed from 38 rows.
+
+Some test questions are reworded from `starter/questions.csv` rather than verbatim; one
+("crypto backed **margin** loan") adds a second out-of-KB term and so makes abstention easier
+than the original question does. Worth knowing when reading the abstention numbers.

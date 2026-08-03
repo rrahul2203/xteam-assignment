@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .answerer import AnswerService
 from .kb import load_kb, load_questions
+from .retriever import MODE_EMBEDDING, MODE_HYBRID, MODE_TFIDF, Retriever
 
 log = logging.getLogger(__name__)
 
@@ -143,6 +144,50 @@ def _rate(rows, key):
     return sum(1 for r in rows if r[key]) / len(rows) if rows else 0.0
 
 
+def _service(docs, mode=MODE_HYBRID, weight=None, **kwargs):
+    """An AnswerService whose retriever runs in `mode`, leaving the answering layer alone."""
+    service = AnswerService(docs, **kwargs)
+    weights = {} if weight is None else {"embedding_weight": weight}
+    service.retriever = Retriever(docs, mode=mode, **weights)
+    return service
+
+
+def retrieval_modes(questions, gold):
+    """Scores the same gold set with lexical, semantic and fused ranking.
+
+    Reported because choosing embeddings should be a measurement rather than a preference, and
+    because the two signals fail on different questions.
+    """
+    docs = load_kb()
+    results = {}
+    for mode in (MODE_TFIDF, MODE_EMBEDDING, MODE_HYBRID):
+        try:
+            service = _service(docs, mode=mode)
+        except RuntimeError as exc:
+            # Embedding modes need vectors; without them the comparison is simply unavailable.
+            log.info("skipping %s: %s", mode, exc)
+            continue
+        results[mode] = summarise(evaluate(service, questions, gold))
+    return results
+
+
+def weight_sweep(questions, gold, weights=(0.0, 0.2, 0.35, 0.4, 0.45, 0.5, 0.55, 0.8, 1.0)):
+    """Scores across embedding weights, so the chosen fusion sits on a visible curve.
+
+    The grid is tighter around the shipped weight than at the ends, because a coarse step hides
+    where the flat region begins and ends and so cannot show whether the choice sits on a cliff.
+    """
+    docs = load_kb()
+    sweep = []
+    for weight in weights:
+        try:
+            service = _service(docs, mode=MODE_HYBRID, weight=weight)
+        except RuntimeError:
+            return sweep
+        sweep.append((weight, summarise(evaluate(service, questions, gold))))
+    return sweep
+
+
 def ablations(questions, gold):
     """Re-scores the gold set with one design decision disabled at a time."""
     docs = load_kb()
@@ -180,10 +225,12 @@ def threshold_sweep(questions, gold, thresholds=(0.0, 0.15, 0.25, 0.35, 0.45, 0.
 
 def report():
     questions, gold = load_questions(), load_gold()
-    rows = evaluate(AnswerService(), questions, gold)
+    service = AnswerService()
+    rows = evaluate(service, questions, gold)
     summary = summarise(rows)
 
-    log.info("gold set: %d questions", summary["n"])
+    log.info("gold set: %d questions, ranking mode %s",
+             summary["n"], service.retriever.describe())
     log.info("document accuracy      %.3f   (answerable questions, right doc cited)",
              summary["doc_accuracy"])
     log.info("wrong-answer rate      %.3f   (answered confidently, cited the wrong doc)",
@@ -200,6 +247,19 @@ def report():
         low, high = stats["ci"]
         log.info("  %-13s %d/%d = %.3f   95%% CI [%.2f, %.2f]",
                  stratum, stats["correct"], stats["n"], stats["rate"], low, high)
+
+    log.info("\nretrieval mode (document accuracy / wrong-answer / abstention recall)")
+    for mode, summ in retrieval_modes(questions, gold).items():
+        log.info("  %-16s %.3f / %.3f / %.3f", mode, summ["doc_accuracy"],
+                 summ["wrong_answer_rate"], summ["abstention_recall"])
+
+    sweep = weight_sweep(questions, gold)
+    if sweep:
+        log.info("\nembedding weight sweep (0.0 = lexical only, 1.0 = semantic only)")
+        log.info("  %-8s %-10s %-10s %s", "weight", "doc_acc", "wrong", "abstain_recall")
+        for weight, summ in sweep:
+            log.info("  %-8.2f %-10.3f %-10.3f %.3f", weight, summ["doc_accuracy"],
+                     summ["wrong_answer_rate"], summ["abstention_recall"])
 
     log.info("\nablations (document accuracy / wrong-answer rate)")
     for name, summ in ablations(questions, gold).items():

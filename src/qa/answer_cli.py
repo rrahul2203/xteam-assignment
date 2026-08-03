@@ -13,6 +13,7 @@ import logging
 
 from .answerer import AnswerService
 from .kb import default_questions_path, load_kb, load_questions, require_date
+from .retriever import MODE_HYBRID, MODES, Retriever
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,8 @@ def parse_args(argv=None):
     p.add_argument("--as-of", help="date for --question, ISO format")
     p.add_argument("--output", default="answers.csv", help="where to write answers")
     p.add_argument("--kb", default=None, help="KB directory, defaults to starter/kb")
+    p.add_argument("--mode", default=MODE_HYBRID, choices=MODES,
+                   help="ranking signals to use, defaults to hybrid")
     p.add_argument("--verbose", action="store_true", help="add status and score columns")
     return p.parse_args(argv)
 
@@ -38,7 +41,10 @@ def main(argv=None):
     if args.question and not args.as_of:
         raise SystemExit("--question requires --as-of")
 
-    service = AnswerService(load_kb(args.kb) if args.kb else None)
+    docs = load_kb(args.kb) if args.kb else load_kb()
+    service = AnswerService(docs)
+    service.retriever = Retriever(docs, mode=args.mode)
+    log.info("ranking mode: %s", service.retriever.describe())
 
     if args.question:
         result = service.answer(args.question, require_date(args.as_of, "--as-of"))

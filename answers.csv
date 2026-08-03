@@ -1,5 +1,5 @@
 qid,answer,doc_ids
-q01,"Before an account can be closed, all balances must be withdrawn or converted, and any open orders cancelled. Request closure from the account settings page.",kb-108
+q01,"Transfers out of your account are charged at 0.4% of the transfer amount, plus the network cost quoted at the time you confirm. Outbound fiat transfers to a linked bank account are charged $1.50.",kb-013
 q02,"SMS based recovery has been discontinued and is no longer offered for any account. Withdrawals remain disabled for 72 hours after a successful restore, as a precaution against account takeover.",kb-022
 q03,"Disputes must be raised within 30 days of the trade date. Open the trade in your activity list and choose Raise a dispute, select a reason, and attach supporting evidence.",kb-032
 q04,"Earn rates are currently 3.1% APY for ETH, 4.4% APY for SOL and 2.2% APY for ADA. Rates are variable, are reviewed quarterly, and the rate displayed when you stake is not fixed for the life of the position.",kb-042
@@ -17,7 +17,7 @@ q15,"No, not as at 2026-07-28. The relevant notice (Scheduled Maintenance Notice
 q16,"No, not as at 2026-07-28. The relevant notice (Referral Bonus Program) applied until 2026-03-31 and is no longer in force. For the record, it said: Invite a friend and you both receive a $25 bonus once they complete identity verification and their first trade of at least $100.",kb-092
 q17,"No, not as at 2026-07-28. The relevant notice (Scheduled Maintenance Notice) applied until 2026-06-14 and is no longer in force. For the record, it said: Withdrawals and outbound transfers are paused for scheduled maintenance from 2026-06-12 22:00 UTC until 2026-06-14 06:00 UTC.",kb-091
 q18,"No, not as at 2026-07-28. The relevant notice (Referral Bonus Program) applied until 2026-03-31 and is no longer in force. For the record, it said: Invite a friend and you both receive a $25 bonus once they complete identity verification and their first trade of at least $100.",kb-092
-q19,"Funding a purchase with a linked card is charged at 2.49% of the purchase value, applied on top of the quoted spread. Card funded orders are credited instantly.",kb-072
+q19,"We are aware that card funded purchases are completing more slowly than usual. The order is not lost and no duplicate charge is applied, so please do not resubmit the purchase.",kb-093
 q20,"Version 1 of the public API is deprecated and will stop responding on 2027-01-15. All endpoints have a v2 equivalent documented in the developer portal. v1 keys continue to work until the shutdown date, but no new v1 keys are being issued.",kb-094
 q21,Annual tax documents for the previous calendar year are published by February 15 and can be downloaded from the Reports section of your account. We do not provide tax advice and the documents are informational only.,kb-101
 q22,"Not answerable from the knowledge base. No document in force on 2026-07-28 covers this, so this needs a human agent.",
