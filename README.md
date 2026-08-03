@@ -64,6 +64,37 @@ anecdote.
 
 Secondary: macro-F1, per-class recall, abstention rate, p95 latency.
 
+## What the fix changes
+
+Working version in `src/`, walked through in `notebook/baseline_fix_walkthrough.ipynb`.
+Each number below is measured under template-grouped CV.
+
+1. **Vectorisers moved inside a `Pipeline`.** The baseline calls `fit_transform` on all
+   400 rows before splitting. Now no split can fit a vectoriser on rows it will score.
+2. **Template-grouped CV replaces the 80/20 split.** `template_key` collapses 400 rows to
+   70 intents. Same baseline recipe scores 0.9783 macro-F1 on a random split and 0.7863
+   grouped — the split choice, not the model, produced the 98.75%.
+3. **Character n-grams added alongside word features.** 0.7925 → 0.8494 macro-F1, the
+   largest single gain. Unseen phrasings match on substrings, and typos stop being unknown
+   tokens.
+4. **Class weights skewed toward fraud, not just balanced.** Fraud recall 0.600 unweighted,
+   0.776 at inverse-frequency, 0.904 skewed past it. Macro-F1 stays ~0.85 across all three,
+   so the baseline's headline metric can't see this choice at all.
+5. **The skew is derived, not chosen.** `solve_skew` takes the fraud precision floor the
+   queue can absorb (0.60) and returns the largest skew clearing it. It solves to 2.5 at
+   char=(2,4) and 1.75 at (2,5) — a hardcoded weight would have gone stale silently.
+6. **Hyperparameters come from a grouped grid search**, averaged over 5 seeds. One
+   deliberate override: the search ranks `C=30` first (0.8578 vs 0.8537) but it sheds fraud
+   recall (0.876 vs 0.904), and recall is the guardrail.
+7. **Weights are derived per fold** from training rows only. Computing them once from all
+   400 labels leaks the class distribution into every fold.
+8. **Fraud recall is reported as its own line**, next to both split protocols, so the
+   leakage gap stays visible on every run instead of being something you have to go looking
+   for.
+
+Result: macro-F1 0.84, `fraud-report` recall 0.90 at 0.61 precision. Below the 0.98 recall
+target above — that gap is real and needs the non-templated set.
+
 ## Before shipping
 
 1. Vectoriser into a `Pipeline`.
