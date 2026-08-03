@@ -12,3 +12,7 @@ sentence-transformers==5.6.1
 # install -- see the README for `brew install tesseract`. Part C tests skip without it.
 pillow==12.3.0
 pytesseract==0.3.13
+
+# Not installed: the vision-model tier of screenshot_compare needs torchvision and a ~1GB model
+# checkout, and it exists to report a comparison rather than to route anything. That tier skips
+# with a warning, so nothing in Part C depends on it.

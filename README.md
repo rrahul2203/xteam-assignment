@@ -7,7 +7,7 @@ into Part A's four routes. **[How to run everything](#how-to-run-it) is one sect
 
 ```
 src/router/    Part A — data · crossval · model · evaluate · predict · tune · artifact
-               Part C — screenshots · screenshot_eval
+               Part C — screenshots · screenshot_eval · screenshot_compare
 src/qa/        Part B — kb · retriever · embeddings · answerer · eval_answers · answer_cli
                plus build_vectors · fetch_model (one-off setup)
 tests/         test_kb · test_retriever · test_answerer · test_artifact · test_screenshots
@@ -127,10 +127,14 @@ result.text, result.doc_ids, result.status      # -> "...within 60 days...", ["k
 ./venv/bin/python -m src.router.screenshots --image starter/media/screenshots/txn-failed.png
 
 ./venv/bin/python -m src.router.screenshot_eval # blur sweep: how routing degrades
+
+# OCR against a vision language model on the same scans. Runs the OCR tier alone without --vlm.
+./venv/bin/python -m src.router.screenshot_compare --vlm /path/to/SmolVLM-500M-Instruct
 ```
 
 Needs `brew install tesseract` from step 1. Reuses `models/router.joblib`, so there is no second
-model to build.
+model to build. `screenshot_compare` needs a local vision model directory for its second tier and
+skips it with a warning otherwise, so the model is not a dependency of Part C.
 
 ---
 
@@ -535,6 +539,48 @@ routes needs that. The route is decided by *what the customer wrote*, which is t
 The consequence worth stating: this reuses the Part A classifier unchanged, so a screenshot and a
 typed ticket are routed by the same model on the same four labels. Part C adds an extraction
 stage, not a second classifier with its own drift and its own retraining story.
+
+**The comparison, run rather than asserted.** `screenshot_compare.py` puts both approaches through
+the same 12 scans — 3 assets at 4 blur radii — routing with OCR plus the Part A classifier, then
+with a vision language model shown the image and asked for the route directly. The model is
+[SmolVLM-500M-Instruct](https://huggingface.co/HuggingFaceTB/SmolVLM-500M-Instruct), 507M
+parameters, run locally on MPS:
+
+```bash
+./venv/bin/python -m src.router.screenshot_compare --vlm /path/to/SmolVLM-500M-Instruct
+```
+
+| Tier | Correct | Latency, clean image | Routes used | r=0 | r=2 | r=3 | r=4 |
+|---|---|---|---|---|---|---|---|
+| OCR + Part A | 9/12 | 907–934ms | 4 of 4 | 3/3 | 3/3 | 2/3 | 1/3 |
+| Vision LLM | 7/12 | 2368–2520ms | **2 of 4** | **1/3** | 2/3 | 2/3 | 2/3 |
+
+The 7/12 is not a near miss, and the "routes used" column is why it is in the table. The model
+answered `account-access` on **9 of the 12 scans** regardless of what was on screen, so its score is
+one constant guess landing on the assets that happen to match it. Read the blur row left to right
+and it appears to *improve* as the image degrades, which is the signature of an answer that never
+depended on the pixels. A tier that always says one thing scores 1/3 on a three-class problem
+without discriminating at all.
+
+Asking it to transcribe instead of route shows the same thing at the level below:
+
+| Asset | OCR | Vision LLM asked to transcribe |
+|---|---|---|
+| `login-error.png` | 99 words | *"Sign in page."* |
+| `phishing-sms.png` | 136 words | *"Screen shows a message alert."* |
+| `txn-failed.png` | 96 words | *"Transaction detail."* |
+
+Those are captions, not transcriptions. At this size the model describes the *kind* of screen and
+never reads a line of it — so it cannot see the `448120` admission that decides the fraud route,
+and there is no intermediate output to inspect when it routes wrongly. OCR is 2.5× faster and
+returns text a human can check.
+
+The honest scope of that result: it rules out a **small local** VLM, which is the only tier I could
+measure here. A hosted frontier model would very likely transcribe these three images correctly, and
+I have no API access in this environment to show otherwise — so treat "vision models cannot do this"
+as untested and "a 500M local vision model cannot do this" as measured. The argument against the
+hosted tier is not capability, it is the one in [Where these get processed](#where-these-get-processed-and-why-that-is-the-whole-design):
+it sends customer screenshots off the machine, and it bills per ticket where OCR does not.
 
 **Two passes, not one.** These screenshots are light-on-dark, and one pass is not enough:
 
