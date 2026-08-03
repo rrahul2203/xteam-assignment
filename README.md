@@ -706,16 +706,3 @@ middle of an all-digit address and leaves the `bc1q` prefix behind as literal te
 text-only — **the source PNG still contains everything**. The routed text is clean; the attachment it
 came from is not, so retention and access control on the stored image is the unsolved half and a real
 deployment needs an image-retention policy to match.
-
-## Limits
-
-Three assets, all synthetic, all clean renders from one design system, all English, all portrait
-at one resolution. That is enough to demonstrate the pipeline and to characterise how it fails
-under blur; it cannot support an accuracy claim, a threshold tuned to two significant figures, or
-any statement about photographed screens, other languages or other apps. `MIN_OCR_CONFIDENCE = 60`
-separates 15 clean scans from 3 misroutes on this handful — it is a defensible starting point, not
-a calibrated value, and the first real batch should move it.
-
-The blur sweep is one degradation axis. JPEG artefacts, downscaling, glare, rotation and partial
-crops all break OCR differently and none is tested here. Redaction is pattern-based, so it
-catches the identifier shapes it knows and would miss a national ID format nobody added.
