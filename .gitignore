@@ -8,5 +8,6 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Vendored embedding model, downloaded on demand (see README)
-models/
+# Vendored embedding model: 87MB of weights, downloaded on demand (see README).
+# models/router.joblib is committed instead -- 228KB, and predict.py needs it to run.
+models/all-MiniLM-L6-v2/

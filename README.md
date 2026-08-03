@@ -2,35 +2,102 @@
 
 Two parts, side by side. [Part A](#part-a--support-ticket-router-baseline-review) reviews the
 handed-over route classifier. [Part B](#part-b--answering-from-the-knowledge-base) is the
-date-aware question answering service.
+date-aware question answering service. **[How to run everything](#how-to-run-it) is one section,
+below.**
 
 ```
-src/router/    Part A — data · crossval · model · evaluate · predict · tune
+src/router/    Part A — data · crossval · model · evaluate · predict · tune · artifact
 src/qa/        Part B — kb · retriever · embeddings · answerer · eval_answers · answer_cli
                plus build_vectors · fetch_model (one-off setup)
-tests/         Part B — test_kb · test_retriever · test_answerer
+tests/         test_kb · test_retriever · test_answerer · test_artifact
 eval/          Part B — gold.csv labels · doc_vectors.npz cached embeddings
+models/        router.joblib (committed) · all-MiniLM-L6-v2 (fetched, gitignored)
 ```
+
+---
+
+# How to run it
+
+Every command in one place. **Verified from a clean `git clone` into an empty venv**, because "it
+works on my machine" is not a claim a reviewer can check.
+
+## 1. Setup — once
+
+```bash
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt      # one file, includes pytest and torch
+```
+
+```bash
+# Part B only: vendors the sentence-embedding model into models/ (~87MB, once).
+# Skip it and Part B still runs, ranking lexically at 0.867 instead of 0.933.
+./venv/bin/python -m src.qa.fetch_model
+```
+
+## 2. Tests
+
+```bash
+./venv/bin/python -m pytest tests/ -q           # 84 passed
+```
+
+Without `fetch_model`: 79 passed, 5 skipped. The skips are the fusion tests, which need to encode
+a query; each names the reason rather than failing, so green means green.
+
+## 3. Part A — route classification
+
+```bash
+# Batch, per the starter pack's output contract. Writes text,prediction.
+./venv/bin/python -m src.router.predict --input messages.csv --output predictions.csv
+
+# One message, straight to stdout.
+./venv/bin/python -m src.router.predict --text "I see a transfer I never made"
+
+# --confidence adds the top-class probability, which is what a review queue thresholds on.
+./venv/bin/python -m src.router.predict --input messages.csv --confidence
+```
+
+```bash
+./venv/bin/python -m src.router.evaluate        # the honest scores in Part A below
+./venv/bin/python -m src.router.tune            # re-derive the tuned settings (slow, grid search)
+./venv/bin/python -m src.router.artifact        # retrain and rewrite models/router.joblib
+```
+
+`predict` **loads** `models/router.joblib`; it does not fit. Pass `--retrain` to train in-process
+instead, for development against edited data.
+
+## 4. Part B — question answering
+
+```bash
+# Batch entry point. Writes qid,answer,doc_ids.
+./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --output answers.csv
+
+# One question, as at a date. The date is the whole point — try 2026-06-30 vs 2026-07-01.
+./venv/bin/python -m src.qa.answer_cli --question "How long do I have to raise a dispute?" \
+                                       --as-of 2026-03-01
+
+./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --mode tfidf  # no embeddings
+```
+
+```bash
+./venv/bin/python -m src.qa.eval_answers        # scores, strata, ablations, sweeps
+./venv/bin/python -m src.qa.build_vectors       # refresh eval/doc_vectors.npz after editing kb/
+```
+
+As a library:
+
+```python
+from src.qa.answerer import AnswerService
+service = AnswerService()                       # loads the KB and vectors once
+result = service.answer("How long do I have to raise a dispute?", "2026-03-01")
+result.text, result.doc_ids, result.status      # -> "...within 60 days...", ["kb-031"], "answered"
+```
+
+---
 
 # Part A — Support Ticket Router baseline review
 
-Numbers below come from `notebook/baseline_classifier_training.ipynb`.
-
-## Running it
-
-```bash
-python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
-
-# Route classification, per the starter pack's output contract.
-./venv/bin/python -m src.router.predict --input messages.csv --output predictions.csv
-./venv/bin/python -m src.router.predict --text "I see a transfer I never made"   # one message
-
-./venv/bin/python -m src.router.evaluate   # the honest scores below
-./venv/bin/python -m src.router.tune       # re-derive the tuned settings
-```
-
-`predictions.csv` has `text` and `prediction`; `--confidence` adds the top-class probability,
-which is what a review queue would threshold on.
+Numbers below come from `notebook/baseline_classifier_training.ipynb`. Commands are in
+[How to run it](#3-part-a--route-classification).
 
 `crossval` holds the grouped-CV protocol that `evaluate`, `model` and `tune` all score
 through, so the search and the reported number cannot drift apart.
@@ -130,6 +197,35 @@ target above — that gap is real and needs the non-templated set.
 
 Baseline's probably close to good enough. The evaluation isn't.
 
+## The trained model is saved
+
+`models/router.joblib` (228KB, committed) holds the fitted pipeline. `predict` loads it and
+**never fits**.
+
+The reason is not speed on this data — training 400 rows takes 82ms. It is that fitting is
+proportional to the training set, so training inside the prediction path is a cost that grows
+with the corpus and repeats on every call:
+
+| Training rows | Fit | Load artifact |
+|---|---|---|
+| 400 (this repo) | 82ms | **7ms** |
+| 4,000 | 385ms | 7ms |
+| 16,000 | 1,354ms | 7ms |
+
+Loading is flat; fitting is not. At a large corpus and high request volume the retraining version
+is the wrong shape regardless of how fast it looks at n=400, so a missing artifact raises with the
+command to build it rather than quietly training and hiding the cost. `test_get_pipeline_never_calls_train`
+pins this by making `train` raise if the prediction path touches it.
+
+The second reason is provenance. The artifact stores the training-row count, a digest of
+`train.csv`, the resolved hyperparameters (`C`, n-gram ranges, `FRAUD_SKEW`) and the scikit-learn
+version, so a prediction can be traced to the model that made it. Edit `train.csv` and the next
+load warns that the digest no longer matches — it still predicts, because refusing to load would
+break the CLI after any data edit, but it will not do so silently.
+
+Training is deterministic (verified: identical coefficients across fits), so the artifact is a
+convenience and an audit record rather than the only way to obtain this model.
+
 ---
 
 # Part B — Answering from the knowledge base
@@ -145,50 +241,17 @@ scores below are what a reviewer reproduces by default — but the service does 
 them: it ranks lexically, says so in the log, and scores 0.867 instead of 0.933. Three tests pin
 that fallback by simulating the dependency's absence.
 
-## Running it
+Commands are in [How to run it](#4-part-b--question-answering).
 
-Two commands from a clean clone. **Verified by actually doing it** — cloning into an empty venv —
-because "it works on my machine" is not a claim a reviewer can check:
+**On the embedding model.** `fetch_model` keeps inference off the network: without a local copy the
+first question of the first run pays the download inside the answering path; with one,
+`load_model()` reads `models/all-MiniLM-L6-v2` **once per process** — 0.44s at startup, then a flat
+28ms per question with no reload. It skips files already present and retries a dropped connection
+rather than restarting the 87MB file.
 
-```bash
-python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
-./venv/bin/python -m src.qa.fetch_model    # vendors the model into models/, ~87MB, once
-```
-
-```bash
-./venv/bin/python -m pytest tests/ -q      # 76 passed
-```
-
-**Why `models/` is not in git.** 87MB of binary weights would sit in the history of every clone
-forever, and `fetch_model` reproduces them in one command against a pinned model name. What *is*
-committed is `eval/doc_vectors.npz` (44KB) — the document vectors — so the retrieval fixture
-travels with the repo even though the weights do not.
-
-If `fetch_model` cannot reach the network, everything still runs: `pytest` reports 71 passed and
-5 skipped (the fusion tests, which need to encode a query), each skip naming the reason rather
-than failing, and the CLI answers in `tfidf` mode.
-
-`fetch_model` is what keeps inference off the network afterwards. Without a local copy the first
-question of the first run pays the download inside the answering path; with one, `load_model()`
-reads `models/all-MiniLM-L6-v2` and the model is loaded **once per process** — 0.44s at startup,
-then a flat 28ms per question with no reload. It skips files already present, so re-running it is
-free, and it retries a dropped connection rather than restarting the 87MB file.
-
-```bash
-./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --output answers.csv
-./venv/bin/python -m src.qa.answer_cli --question "How long do I have to raise a dispute?" \
-                                       --as-of 2026-03-01
-./venv/bin/python -m src.qa.answer_cli --input starter/questions.csv --mode tfidf   # no embeddings
-./venv/bin/python -m src.qa.eval_answers   # the numbers below, plus ablations
-./venv/bin/python -m src.qa.build_vectors  # refresh eval/doc_vectors.npz after editing kb/
-```
-
-```python
-from src.qa.answerer import AnswerService
-service = AnswerService()                       # loads the KB and vectors once
-result = service.answer("How long do I have to raise a dispute?", "2026-03-01")
-result.text, result.doc_ids, result.status      # -> "...within 60 days...", ["kb-031"], "answered"
-```
+Those 87MB are gitignored: binary weights would sit in the history of every clone forever, and one
+pinned command reproduces them. `eval/doc_vectors.npz` (44KB, the document vectors) *is* committed,
+so the retrieval fixture travels with the repo even though the weights do not.
 
 ## Retrieval: two signals, because they fail differently
 
