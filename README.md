@@ -95,11 +95,4 @@ Each number below is measured under template-grouped CV.
 Result: macro-F1 0.84, `fraud-report` recall 0.90 at 0.61 precision. Below the 0.98 recall
 target above — that gap is real and needs the non-templated set.
 
-## Before shipping
-
-1. Vectoriser into a `Pipeline`.
-2. Grouped CV and per-class recall as the standard report.
-3. Confidence threshold plus fraud-keyword net.
-4. Shadow mode behind the queue, recall on a dashboard.
-
 Baseline's probably close to good enough. The evaluation isn't.
